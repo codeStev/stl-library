@@ -61,6 +61,7 @@ export const api = {
   creators: () => get<Creator[]>("/api/creators"),
   issues: () => get<Issue[]>("/api/issues"),
   imageURL: (id: number) => `/api/images/${id}`,
+  thumbURL: (id: number) => `/api/images/${id}/thumb`,
   partURL: (id: number) => `/api/parts/${id}`,
   zipURL: (variantId: number) => `/api/variants/${variantId}/zip`,
 };

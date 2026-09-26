@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -32,13 +33,21 @@ func serve(ctx context.Context, root, data, listen string, every time.Duration) 
 	}
 	defer store.Close()
 
-	api := &httpapi.API{Store: store, Files: disk.Files{Root: root}}
+	files := disk.Files{Root: root}
+	thumbs := app.NewThumbs(store, files, disk.ThumbCache{Dir: filepath.Join(data, "thumbs")})
+	api := &httpapi.API{Store: store, Files: files, Thumbs: thumbs}
 	mux := http.NewServeMux()
 	mux.Handle("/api/", api.Handler())
 	mux.Handle("/", web.Handler())
 	srv := &http.Server{Addr: listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 
-	go scanLoop(ctx, disk.Lister{Root: root}, store, every)
+	// A soft memory ceiling for a small shared server, unless the operator
+	// set one.
+	if os.Getenv("GOMEMLIMIT") == "" {
+		debug.SetMemoryLimit(150 << 20)
+	}
+
+	go scanLoop(ctx, disk.Lister{Root: root}, store, thumbs, every)
 
 	errc := make(chan error, 1)
 	go func() {
@@ -58,7 +67,7 @@ func serve(ctx context.Context, root, data, listen string, every time.Duration) 
 	return nil
 }
 
-func scanLoop(ctx context.Context, l app.Lister, s app.Store, every time.Duration) {
+func scanLoop(ctx context.Context, l app.Lister, s app.Store, thumbs *app.Thumbs, every time.Duration) {
 	for {
 		start := time.Now()
 		st, err := app.Scan(ctx, l, s)
@@ -70,6 +79,11 @@ func scanLoop(ctx context.Context, l app.Lister, s app.Store, every time.Duratio
 		} else {
 			slog.Info("scan done", "took", time.Since(start).Round(time.Millisecond), "added", st.Added,
 				"updated", st.Updated, "removed", st.Removed, "unchanged", st.Unchanged, "issues", st.Issues)
+			start = time.Now()
+			made, failed := thumbs.WarmCovers(ctx)
+			if made+failed > 0 {
+				slog.Info("cover thumbnails", "made", made, "failed", failed, "took", time.Since(start).Round(time.Second))
+			}
 		}
 		select {
 		case <-ctx.Done():

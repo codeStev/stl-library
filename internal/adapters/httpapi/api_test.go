@@ -5,6 +5,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"image"
+	"image/jpeg"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -28,6 +31,7 @@ func server(t *testing.T) *httptest.Server {
 		"Loot Studios/Abyssal Haze/Enemies/Bell Head/32mm/Supported Lychee/base.lys": "BASE",
 		"Loot Studios/Abyssal Haze/Enemies/Bell Head/32mm/No Supports/bell.stl":      "STL",
 		"Loot Studios/Abyssal Haze/Enemies/Bell Head/cover.jpg":                      "JPG",
+		"Loot Studios/Abyssal Haze/Enemies/Bell Head/render.png":                     tinyPNG(),
 		"Artisan Guild/Noble Alfar/Kövön the Wise/k.stl":                             "K",
 		"Lord of the Print/Unchained/Araki/Presupported/a.stl":                       "A",
 	} {
@@ -43,7 +47,9 @@ func server(t *testing.T) *httptest.Server {
 	if _, err := app.Scan(context.Background(), disk.Lister{Root: root}, store); err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer((&API{Store: store, Files: disk.Files{Root: root}}).Handler())
+	files := disk.Files{Root: root}
+	thumbs := app.NewThumbs(store, files, disk.ThumbCache{Dir: t.TempDir()})
+	srv := httptest.NewServer((&API{Store: store, Files: files, Thumbs: thumbs}).Handler())
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -79,7 +85,7 @@ func TestSearchThenModelDetail(t *testing.T) {
 	}
 	var m modelDetail
 	getJSON(t, srv, "/api/models/"+itoa(hits[0].ID), &m)
-	if len(m.Variants) != 2 || len(m.Images) != 1 || m.Images[0].Name != "cover.jpg" {
+	if len(m.Variants) != 2 || len(m.Images) != 2 || m.Images[0].Name != "cover.jpg" {
 		t.Fatalf("detail: %+v", m)
 	}
 	v := m.Variants[1]
@@ -162,6 +168,31 @@ func TestAttachmentHeaderSurvivesNonASCII(t *testing.T) {
 	want := `attachment; filename="K_v_n _the_ Wise.zip"; filename*=UTF-8''K%C3%B6v%C3%B6n%20%22the%22%20Wise.zip`
 	if got != want {
 		t.Errorf("\n got %s\nwant %s", got, want)
+	}
+}
+
+func tinyPNG() string {
+	var b bytes.Buffer
+	png.Encode(&b, image.NewNRGBA(image.Rect(0, 0, 900, 300)))
+	return b.String()
+}
+
+func TestImageThumbnail(t *testing.T) {
+	srv := server(t)
+	var hits []modelSummary
+	getJSON(t, srv, "/api/models?q=bell", &hits)
+	var m modelDetail
+	getJSON(t, srv, "/api/models/"+itoa(hits[0].ID), &m)
+	resp, body := get(t, srv, "/api/images/"+itoa(m.Images[1].ID)+"/thumb") // render.png
+	if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "image/jpeg" {
+		t.Fatalf("thumb: %d %s", resp.StatusCode, body)
+	}
+	img, err := jpeg.Decode(bytes.NewReader(body))
+	if err != nil || img.Bounds().Dx() != 400 || img.Bounds().Dy() != 133 {
+		t.Errorf("thumb image: %v %v", err, img.Bounds())
+	}
+	if resp, _ := get(t, srv, "/api/images/"+itoa(m.Images[0].ID)+"/thumb"); resp.StatusCode != 500 {
+		t.Errorf("thumb of a broken image: %d", resp.StatusCode)
 	}
 }
 

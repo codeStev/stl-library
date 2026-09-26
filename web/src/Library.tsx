@@ -66,7 +66,7 @@ export function Library() {
         {models.map((m) => (
           <a key={m.id} className="card" href={`#/model/${m.id}`}>
             <div className="cover">
-              {m.cover ? <img src={api.imageURL(m.cover)} alt="" loading="lazy" /> : <span>no image</span>}
+              {m.cover ? <img src={api.thumbURL(m.cover)} alt="" loading="lazy" /> : <span>no image</span>}
             </div>
             <div className="title">{m.name}</div>
             <div className="sub">

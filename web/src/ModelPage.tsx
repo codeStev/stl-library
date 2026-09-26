@@ -82,7 +82,7 @@ export function ModelPage({ id }: { id: number }) {
                   {pictures.map((p, i) => (
                     <img
                       key={p.id}
-                      src={api.imageURL(p.id)}
+                      src={api.thumbURL(p.id)}
                       alt={p.name}
                       loading="lazy"
                       className={i === image ? "active" : ""}

@@ -20,8 +20,9 @@ import (
 
 // API serves the library index and its files.
 type API struct {
-	Store app.Store
-	Files app.Files
+	Store  app.Store
+	Files  app.Files
+	Thumbs *app.Thumbs
 }
 
 // Handler routes /api/… requests.
@@ -34,6 +35,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /api/variants/{id}/zip", a.variantZip)
 	mux.HandleFunc("GET /api/parts/{id}", a.part)
 	mux.HandleFunc("GET /api/images/{id}", a.image)
+	mux.HandleFunc("GET /api/images/{id}/thumb", a.thumb)
 	return mux
 }
 
@@ -196,6 +198,21 @@ func (a *API) part(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) image(w http.ResponseWriter, r *http.Request) {
 	a.serveFile(w, r, func(id int64) (*app.FileRef, error) { return a.Store.Image(r.Context(), id) }, false)
+}
+
+func (a *API) thumb(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	data, err := a.Thumbs.Image(r.Context(), id)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Cache-Control", "private, max-age=86400")
+	w.Write(data)
 }
 
 func (a *API) serveFile(w http.ResponseWriter, r *http.Request, lookup func(int64) (*app.FileRef, error), download bool) {
