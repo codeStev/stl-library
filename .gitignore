@@ -2,3 +2,8 @@
 *.db-wal
 *.db-shm
 /stlib
+
+# web UI build output and dependencies
+/internal/adapters/web/dist/*
+!/internal/adapters/web/dist/.gitkeep
+/web/node_modules/

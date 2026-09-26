@@ -14,6 +14,7 @@ import (
 	"github.com/codeStev/stl-library/internal/adapters/disk"
 	"github.com/codeStev/stl-library/internal/adapters/httpapi"
 	"github.com/codeStev/stl-library/internal/adapters/sqlite"
+	"github.com/codeStev/stl-library/internal/adapters/web"
 	"github.com/codeStev/stl-library/internal/app"
 )
 
@@ -32,7 +33,10 @@ func serve(ctx context.Context, root, data, listen string, every time.Duration) 
 	defer store.Close()
 
 	api := &httpapi.API{Store: store, Files: disk.Files{Root: root}}
-	srv := &http.Server{Addr: listen, Handler: api.Handler(), ReadHeaderTimeout: 10 * time.Second}
+	mux := http.NewServeMux()
+	mux.Handle("/api/", api.Handler())
+	mux.Handle("/", web.Handler())
+	srv := &http.Server{Addr: listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 
 	go scanLoop(ctx, disk.Lister{Root: root}, store, every)
 
