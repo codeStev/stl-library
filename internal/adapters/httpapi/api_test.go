@@ -50,7 +50,7 @@ func server(t *testing.T) *httptest.Server {
 	}
 	files := disk.Files{Root: root}
 	thumbs := app.NewThumbs(store, files, disk.ThumbCache{Dir: t.TempDir()})
-	srv := httptest.NewServer((&API{Store: store, Files: files, Thumbs: thumbs}).Handler())
+	srv := httptest.NewServer((&API{Store: store, Files: files, Thumbs: thumbs, User: app.UserData{Store: store}}).Handler())
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -217,3 +217,104 @@ func TestImageThumbnail(t *testing.T) {
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+func send(t *testing.T, srv *httptest.Server, method, path, body string) (int, string) {
+	t.Helper()
+	req, _ := http.NewRequest(method, srv.URL+path, strings.NewReader(body))
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
+}
+
+func TestTagsNamesPrintsAndQueue(t *testing.T) {
+	srv := server(t)
+	var hits []modelSummary
+	getJSON(t, srv, "/api/models?q=bell", &hits)
+	id := itoa(hits[0].ID)
+
+	if code, body := send(t, srv, "PUT", "/api/models/"+id+"/tags", `{"tags":[" painted ","Painted","wip"]}`); code != 200 || body != `{"tags":["painted","wip"]}`+"\n" {
+		t.Errorf("set tags: %d %s", code, body)
+	}
+	if code, _ := send(t, srv, "PUT", "/api/models/"+id+"/name", `{"name":"Bellringer"}`); code != 204 {
+		t.Errorf("set name: %d", code)
+	}
+	var tagged []modelSummary
+	getJSON(t, srv, "/api/models?tag=wip", &tagged)
+	if len(tagged) != 1 || tagged[0].DisplayName != "Bellringer" || len(tagged[0].Tags) != 2 {
+		t.Errorf("by tag: %+v", tagged)
+	}
+
+	var m modelDetail
+	getJSON(t, srv, "/api/models/"+id, &m)
+	vid := itoa(m.Variants[0].ID)
+	if code, _ := send(t, srv, "PUT", "/api/variants/"+vid+"/queue", `{"note":"next weekend"}`); code != 204 {
+		t.Errorf("enqueue: %d", code)
+	}
+	var q []struct {
+		VariantID int64  `json:"variantId"`
+		Model     string `json:"model"`
+		Note      string `json:"note"`
+	}
+	getJSON(t, srv, "/api/queue", &q)
+	if len(q) != 1 || q[0].Model != "Bellringer" || q[0].Note != "next weekend" {
+		t.Errorf("queue: %+v", q)
+	}
+	code, body := send(t, srv, "POST", "/api/variants/"+vid+"/prints", `{"note":"looks great"}`)
+	if code != 201 || !strings.Contains(body, "looks great") {
+		t.Errorf("print: %d %s", code, body)
+	}
+	getJSON(t, srv, "/api/queue", &q)
+	if len(q) != 0 {
+		t.Errorf("printing did not take it off the queue: %+v", q)
+	}
+	var printed []modelSummary
+	getJSON(t, srv, "/api/models?printed=yes", &printed)
+	if len(printed) != 1 || printed[0].Prints != 1 {
+		t.Errorf("printed: %+v", printed)
+	}
+	getJSON(t, srv, "/api/models/"+id, &m)
+	if len(m.Variants[0].Prints) != 1 {
+		t.Fatalf("variant prints: %+v", m.Variants[0])
+	}
+	if code, _ := send(t, srv, "DELETE", "/api/prints/"+itoa(m.Variants[0].Prints[0].ID), ""); code != 204 {
+		t.Errorf("delete print: %d", code)
+	}
+	var tags []struct {
+		Tag    string
+		Models int
+	}
+	getJSON(t, srv, "/api/tags", &tags)
+	if len(tags) != 2 {
+		t.Errorf("tags: %+v", tags)
+	}
+}
+
+func TestWritesNeedJSON(t *testing.T) {
+	srv := server(t)
+	req, _ := http.NewRequest("PUT", srv.URL+"/api/models/1/tags", strings.NewReader(`tags=x`))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnsupportedMediaType {
+		t.Errorf("form post: %d", resp.StatusCode)
+	}
+	if code, _ := send(t, srv, "PUT", "/api/models/1/name", `{"name":`); code != 400 {
+		t.Errorf("broken JSON: %d", code)
+	}
+	if code, _ := send(t, srv, "PUT", "/api/models/1/name", `{"name":"`+strings.Repeat("x", 201)+`"}`); code != 400 {
+		t.Errorf("too long: %d", code)
+	}
+	if code, _ := send(t, srv, "POST", "/api/variants/999/prints", `{}`); code != 404 {
+		t.Errorf("unknown variant: %d", code)
+	}
+}

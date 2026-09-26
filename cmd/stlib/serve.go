@@ -35,7 +35,7 @@ func serve(ctx context.Context, root, data, listen string, every time.Duration) 
 
 	files := disk.Files{Root: root}
 	thumbs := app.NewThumbs(store, files, disk.ThumbCache{Dir: filepath.Join(data, "thumbs")})
-	api := &httpapi.API{Store: store, Files: files, Thumbs: thumbs}
+	api := &httpapi.API{Store: store, Files: files, Thumbs: thumbs, User: app.UserData{Store: store}}
 	mux := http.NewServeMux()
 	mux.Handle("/api/", api.Handler())
 	mux.Handle("/", web.Handler())

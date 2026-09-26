@@ -23,6 +23,7 @@ type API struct {
 	Store  app.Store
 	Files  app.Files
 	Thumbs *app.Thumbs
+	User   app.UserData
 }
 
 // Handler routes /api/… requests.
@@ -37,6 +38,14 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /api/parts/{id}", a.part)
 	mux.HandleFunc("GET /api/images/{id}", a.image)
 	mux.HandleFunc("GET /api/images/{id}/thumb", a.thumb)
+	mux.HandleFunc("GET /api/tags", a.tags)
+	mux.HandleFunc("PUT /api/models/{id}/tags", a.setTags)
+	mux.HandleFunc("PUT /api/models/{id}/name", a.setName)
+	mux.HandleFunc("POST /api/variants/{id}/prints", a.addPrint)
+	mux.HandleFunc("DELETE /api/prints/{id}", a.deletePrint)
+	mux.HandleFunc("GET /api/queue", a.queue)
+	mux.HandleFunc("PUT /api/variants/{id}/queue", a.enqueue)
+	mux.HandleFunc("DELETE /api/variants/{id}/queue", a.dequeue)
 	return mux
 }
 
@@ -53,7 +62,10 @@ type modelSummary struct {
 	Cover    int64  `json:"cover,omitempty"` // image id
 	// Preview: /api/models/{id}/thumb has something to show (an image or
 	// a rendered STL).
-	Preview bool `json:"preview"`
+	Preview     bool     `json:"preview"`
+	DisplayName string   `json:"displayName,omitempty"`
+	Tags        []string `json:"tags"`
+	Prints      int      `json:"prints"`
 }
 
 type fileRef struct {
@@ -68,6 +80,22 @@ type variant struct {
 	Dims   map[string]string `json:"dims"`
 	Option string            `json:"option,omitempty"`
 	Parts  []fileRef         `json:"parts"`
+	Prints []print           `json:"prints"`
+	Queued bool              `json:"queued"`
+}
+
+type print struct {
+	ID   int64  `json:"id"`
+	At   int64  `json:"at"` // unix seconds
+	Note string `json:"note,omitempty"`
+}
+
+func prints(ps []app.Print) []print {
+	out := make([]print, 0, len(ps))
+	for _, p := range ps {
+		out = append(out, print{p.ID, p.AtUnix, p.Note})
+	}
+	return out
 }
 
 type modelDetail struct {
@@ -77,7 +105,12 @@ type modelDetail struct {
 }
 
 func summary(m app.ModelSummary) modelSummary {
-	return modelSummary{m.ID, m.Creator, m.Release, m.Category, m.Name, m.Dir, m.Variants, m.Parts, m.Bytes, m.Cover, m.Cover != 0 || m.Renderable}
+	tags := m.Tags
+	if tags == nil {
+		tags = []string{}
+	}
+	return modelSummary{m.ID, m.Creator, m.Release, m.Category, m.Name, m.Dir, m.Variants, m.Parts, m.Bytes, m.Cover,
+		m.Cover != 0 || m.Renderable, m.DisplayName, tags, m.Prints}
 }
 
 func refs(fs []app.FileRef) []fileRef {
@@ -109,7 +142,16 @@ func (a *API) searchModels(w http.ResponseWriter, r *http.Request) {
 	if offset < 0 {
 		offset = 0
 	}
-	hits, err := app.Search(r.Context(), a.Store, app.Query{Text: q.Get("q"), Creator: q.Get("creator"), Limit: limit, Offset: offset})
+	query := app.Query{Text: q.Get("q"), Creator: q.Get("creator"), Tag: q.Get("tag"), Limit: limit, Offset: offset}
+	switch q.Get("printed") {
+	case "yes":
+		t := true
+		query.Printed = &t
+	case "no":
+		f := false
+		query.Printed = &f
+	}
+	hits, err := app.Search(r.Context(), a.Store, query)
 	if err != nil {
 		fail(w, err)
 		return
@@ -136,6 +178,7 @@ func (a *API) model(w http.ResponseWriter, r *http.Request) {
 		out.Variants = append(out.Variants, variant{
 			ID: v.ID, Label: strings.Join(convention.CanonicalSegments(v.Dims), " · "),
 			Dims: dims(v.Dims), Option: v.Option, Parts: refs(v.Parts),
+			Prints: prints(v.Prints), Queued: v.Queued,
 		})
 	}
 	writeJSON(w, out)
@@ -234,6 +277,150 @@ func (a *API) modelThumb(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
+func (a *API) tags(w http.ResponseWriter, r *http.Request) {
+	ts, err := a.Store.Tags(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	type tag struct {
+		Tag    string `json:"tag"`
+		Models int    `json:"models"`
+	}
+	out := make([]tag, 0, len(ts))
+	for _, t := range ts {
+		out = append(out, tag{t.Tag, t.Models})
+	}
+	writeJSON(w, out)
+}
+
+func (a *API) setTags(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	var body struct {
+		Tags []string `json:"tags"`
+	}
+	if !ok || !readJSON(w, r, &body) {
+		return
+	}
+	tags, err := a.User.SetTags(r.Context(), id, body.Tags)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if tags == nil {
+		tags = []string{}
+	}
+	writeJSON(w, map[string][]string{"tags": tags})
+}
+
+func (a *API) setName(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	var body struct {
+		Name string `json:"name"`
+	}
+	if !ok || !readJSON(w, r, &body) {
+		return
+	}
+	if err := a.User.SetDisplayName(r.Context(), id, body.Name); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) addPrint(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	var body struct {
+		Note string `json:"note"`
+	}
+	if !ok || !readJSON(w, r, &body) {
+		return
+	}
+	p, err := a.User.MarkPrinted(r.Context(), id, body.Note)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, print{p.ID, p.AtUnix, p.Note})
+}
+
+func (a *API) deletePrint(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	if err := a.Store.DeletePrint(r.Context(), id); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) queue(w http.ResponseWriter, r *http.Request) {
+	items, err := a.Store.Queue(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	type item struct {
+		VariantID int64  `json:"variantId"`
+		ModelID   int64  `json:"modelId"`
+		Model     string `json:"model"`
+		Label     string `json:"label"`
+		Added     int64  `json:"added"`
+		Note      string `json:"note,omitempty"`
+	}
+	out := make([]item, 0, len(items))
+	for _, it := range items {
+		out = append(out, item{it.VariantID, it.ModelID, it.Model, it.Label, it.AddedUnix, it.Note})
+	}
+	writeJSON(w, out)
+}
+
+func (a *API) enqueue(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	var body struct {
+		Note string `json:"note"`
+	}
+	if !ok || !readJSON(w, r, &body) {
+		return
+	}
+	if err := a.User.Enqueue(r.Context(), id, body.Note); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) dequeue(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	if err := a.Store.Dequeue(r.Context(), id); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// readJSON decodes a small JSON body. Requiring the JSON content type also
+// keeps other web sites from submitting changes through a visitor's
+// browser: a cross-site JSON request needs a CORS preflight, which this
+// server never grants.
+func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	if ct, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); ct != "application/json" {
+		http.Error(w, "expected application/json", http.StatusUnsupportedMediaType)
+		return false
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(v); err != nil {
+		http.Error(w, "bad JSON: "+err.Error(), http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
 func (a *API) serveFile(w http.ResponseWriter, r *http.Request, lookup func(int64) (*app.FileRef, error), download bool) {
 	id, ok := pathID(w, r)
 	if !ok {
@@ -287,6 +474,10 @@ func pathID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 func fail(w http.ResponseWriter, err error) {
 	if errors.Is(err, app.ErrNotFound) {
 		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if errors.Is(err, app.ErrInvalid) {
+		http.Error(w, "invalid input", http.StatusBadRequest)
 		return
 	}
 	slog.Error("request failed", "err", err)
