@@ -12,6 +12,10 @@ services:
     restart: unless-stopped
     environment:
       SCAN_INTERVAL: ${SCAN_INTERVAL:-1h}
+      # Importing from a downloads folder: set IMPORT_PATH in .env and use
+      # the override file (docker-compose.import.yml), see the README.
+      IMPORT_INTERVAL: ${IMPORT_INTERVAL:-1h}
+      IMPORT_SETTLE: ${IMPORT_SETTLE:-1h}
     ports:
       - "${APP_BIND_HOST:-127.0.0.1}:${APP_PORT:-8080}:8080"
     volumes:

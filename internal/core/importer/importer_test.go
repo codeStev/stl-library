@@ -187,3 +187,27 @@ func TestTyposRepeatedExtrasAndVariantNamedFolders(t *testing.T) {
 		t.Error("NotAModel")
 	}
 }
+
+func TestHiddenTemporaryFilesAndChangeTimesKeepAFolderWaiting(t *testing.T) {
+	now := time.Unix(100000, 0)
+	old := now.Add(-5 * time.Hour).Unix()
+	// rsync/rclone keep the original modification time; the change time
+	// shows the copy just happened.
+	u := Unit{Files: []File{{Rel: "a.zip", ModUnix: old, ChangeUnix: now.Add(-time.Minute).Unix()}}}
+	if ok, _ := Settled(u, now, time.Hour); ok {
+		t.Error("freshly copied file with an old modification time counted as settled")
+	}
+	// A hidden temporary file (rsync's ".name.XXXXXX") means it's still coming.
+	u = Unit{Files: []File{{Rel: "a.zip", ModUnix: old, ChangeUnix: old}, {Rel: ".b.zip.Xy12Ab", Hidden: true, ModUnix: old, ChangeUnix: old}}}
+	if ok, why := Settled(u, now, time.Hour); ok || !strings.Contains(why, "still downloading") {
+		t.Errorf("hidden temp file: %v %q", ok, why)
+	}
+	// Junk doesn't block, and hidden files are never placed.
+	u = Unit{Name: "M", Creator: "c", Files: []File{{Rel: "a.stl", ModUnix: old, ChangeUnix: old}, {Rel: ".DS_Store", Hidden: true, ModUnix: old}}}
+	if ok, why := Settled(u, now, time.Hour); !ok {
+		t.Errorf("junk blocked: %s", why)
+	}
+	if ps := Placements(u, u.Files, "C"); len(ps) != 1 {
+		t.Errorf("hidden file placed: %+v", ps)
+	}
+}

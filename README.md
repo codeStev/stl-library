@@ -8,7 +8,8 @@ supported/unsupported, hollow/solid, slicer formats).
 Designed for small home servers: a single static Go binary, SQLite, low
 memory, and low CPU/I/O priority for anything that touches the disk.
 
-**The app never moves, renames or deletes your files.** It expects your
+**The app never moves, renames or deletes your files.** (The optional
+importer only ever *adds* new files, see below.) It expects your
 library to follow the folder convention below, reads conforming folders
 exactly, and lists folders that don't conform so you can fix them yourself.
 
@@ -25,6 +26,11 @@ Features:
   is), **print history** per variant and a **print queue**. Kept by folder,
   so it survives rescans.
 - "Not following the convention": the folders the app can't read, and why.
+- Corrections without touching the files: hide a model, fix a variant's
+  label (e.g. a folder the app read as "No Supports" that is supported).
+- **Import from a downloads folder** (optional): new, fully downloaded
+  models are copied into the library in the convention's layout, zip
+  archives unpacked.
 - `stlib check` / `stlib scan` / `stlib search` on the command line.
 
 ## Folder convention
@@ -104,6 +110,37 @@ a rescan of an unchanged library writes nothing and a model keeps its id
 while its folder stays. `search` matches every word as a prefix against
 model name, creator, release and category (diacritics ignored).
 
+### Importing new downloads
+
+With `IMPORT_SOURCE` set, `stlib serve` looks at that folder every
+`IMPORT_INTERVAL` and copies new download folders into the library:
+
+- **Layout:** `<downloads>/<creator>/<model>/…` (or a container folder of
+  models, like "Last month's models"). The creator maps to an existing
+  creator folder of the library when the names match ignoring case,
+  otherwise a new one is made.
+- **Only complete downloads.** A folder is copied once it has no temporary
+  download files (`*.partial`, `*.part`, `*.crdownload`, hidden temp files
+  like rsync's), nothing in it has changed for `IMPORT_SETTLE` (judged by
+  the file system's change time, which downloaders can't set back), and
+  every zip in it opens. Anything else waits for the next run.
+- **Where files go:** variant information is read from folder, archive and
+  file names (`…_pre_supported_lys.zip`, `(Chitubox Pre Supported)`,
+  `Presupports/1-10 Scale_Split`), zips are unpacked, images and documents
+  go next to the model. A wrong guess can be fixed in the UI (fix label).
+- **Never destructive:** the downloads are only read; the library only gets
+  new files (written under a hidden temporary name, then renamed). A file
+  that exists with a different size is kept, the new one is added as
+  "… (imported)".
+- **The first run imports nothing:** it records what's already in the
+  downloads folder (it may have been copied by hand before). Those
+  folders can be imported one by one from the Imports page; everything
+  that arrives later is imported automatically. When new files arrive in
+  an imported folder, the missing ones are copied.
+
+`stlib import --db index.db --source <downloads> --dry-run <library>` shows
+where every file would go without writing anything.
+
 ### Server
 
 ```
@@ -116,6 +153,9 @@ LIBRARY_ROOT=/path/to/library DATA_DIR=./data stlib serve
 | `DATA_DIR` | `./data` | the index (`index.db`) |
 | `LISTEN_ADDR` | `127.0.0.1:8080` | |
 | `SCAN_INTERVAL` | `1h` | time between rescans (at least `1m`); the first scan starts right away |
+| `IMPORT_SOURCE` | (off) | downloads folder to import from; the library must then be writable |
+| `IMPORT_INTERVAL` | `1h` | time between imports (at least `1m`) |
+| `IMPORT_SETTLE` | `1h` | how long a download folder must be unchanged to count as complete |
 
 Each has a flag of the same meaning (`--root`, `--data`, `--listen`,
 `--scan-interval`).
@@ -135,8 +175,11 @@ API:
 | `PUT /api/models/{id}/name` | display name (`{"name": "..."}`, empty = folder name) |
 | `POST /api/variants/{id}/prints`, `DELETE /api/prints/{id}` | record a print (`{"note": "..."}`); delete a record |
 | `GET /api/queue`, `PUT`/`DELETE /api/variants/{id}/queue` | the print queue; add / remove a variant |
+| `PUT /api/models/{id}/hidden` | hide / show a model (`{"hidden": true}`) |
+| `PUT`/`DELETE /api/variants/{id}/label` | correct a variant's dimensions and option (`{"dims": {...}, "option": "..."}`); back to the folder names |
+| `GET /api/imports`, `POST /api/imports/request` | what the importer did with each download folder; import one (`{"source": "..."}`) |
 
-Search takes `q`, `creator`, `tag`, `printed=yes|no`, `limit`, `offset`.
+Search takes `q`, `creator`, `tag`, `printed=yes|no`, `hidden=yes` (include hidden models), `limit`, `offset`.
 Writes take `Content-Type: application/json` only.
 
 There is no authentication: keep it on a private network (it listens on
@@ -153,7 +196,9 @@ docker compose up -d
 ```
 
 The library is mounted read-only at `/library`; the index and thumbnail
-cache live in the `data` volume. The image is a single static binary on
+cache live in the `data` volume. To import new downloads, add
+`-f docker-compose.import.yml` (it mounts the library writable and the
+downloads folder read-only at `/downloads`) and set `IMPORT_PATH`. The image is a single static binary on
 distroless (about 24 MB), running as a non-root user.
 
 ## CI

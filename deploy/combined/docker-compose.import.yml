@@ -1,0 +1,14 @@
+# Turns on importing new downloads into the library:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.import.yml up -d
+#
+# The library then has to be writable (the importer only ever adds new
+# files); the downloads folder stays read-only.
+
+services:
+  stl-library:
+    environment:
+      IMPORT_SOURCE: /downloads
+    volumes:
+      - ${LIBRARY_PATH:?set LIBRARY_PATH in .env}:/library
+      - ${IMPORT_PATH:?set IMPORT_PATH in .env}:/downloads:ro

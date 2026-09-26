@@ -30,13 +30,8 @@ func (d Downloads) List(ctx context.Context) ([]importer.File, error) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if p != d.Root && strings.HasPrefix(e.Name(), ".") {
-			if e.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if e.IsDir() || !e.Type().IsRegular() {
+		hidden := p != d.Root && strings.HasPrefix(e.Name(), ".")
+		if !hidden && (e.IsDir() || !e.Type().IsRegular()) {
 			return nil
 		}
 		info, err := e.Info()
@@ -44,7 +39,13 @@ func (d Downloads) List(ctx context.Context) ([]importer.File, error) {
 			return err
 		}
 		rel, _ := filepath.Rel(d.Root, p)
-		out = append(out, importer.File{Rel: filepath.ToSlash(rel), Size: info.Size(), ModUnix: info.ModTime().Unix()})
+		// Hidden files and folders are reported (a downloader's temporary
+		// files show a download in progress) but never imported.
+		out = append(out, importer.File{Rel: filepath.ToSlash(rel), Size: info.Size(), ModUnix: info.ModTime().Unix(),
+			ChangeUnix: changeTime(info), Hidden: hidden})
+		if hidden && e.IsDir() {
+			return filepath.SkipDir
+		}
 		return nil
 	})
 	return out, err
@@ -59,6 +60,9 @@ func (d Downloads) unitPath(unit, rel string) string {
 func (d Downloads) Expand(_ context.Context, unit string, files []importer.File) ([]importer.File, error) {
 	var out []importer.File
 	for _, f := range files {
+		if f.Hidden {
+			continue
+		}
 		if !importer.IsArchive(f.Rel) {
 			out = append(out, f)
 			continue

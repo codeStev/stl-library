@@ -41,7 +41,7 @@ func TestDownloadsExpandsZipsAndStreamsEntries(t *testing.T) {
 	ctx := context.Background()
 
 	listed, err := d.List(ctx)
-	if err != nil || len(listed) != 2 {
+	if err != nil || len(listed) != 3 { // the hidden file is reported, flagged
 		t.Fatalf("list: %v %v", listed, err)
 	}
 	units := importer.Units(listed)
@@ -114,5 +114,30 @@ func TestLibraryWriterNeverOverwritesAndKeepsTheTime(t *testing.T) {
 	}
 	if err := w.Write(ctx, "../x.stl", strings.NewReader(""), 0); err != ErrOutsideRoot {
 		t.Errorf("escape: %v", err)
+	}
+}
+
+func TestDownloadsReportsHiddenTempFilesAndChangeTimes(t *testing.T) {
+	root := t.TempDir()
+	os.MkdirAll(filepath.Join(root, "wicked/Bust"), 0o755)
+	os.WriteFile(filepath.Join(root, "wicked/Bust/a.zip"), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(root, "wicked/Bust/.b.zip.Xy12Ab"), []byte("x"), 0o644)
+	old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	os.Chtimes(filepath.Join(root, "wicked/Bust/a.zip"), old, old)
+	files, err := Downloads{Root: root}.List(context.Background())
+	if err != nil || len(files) != 2 {
+		t.Fatalf("list: %+v %v", files, err)
+	}
+	for _, f := range files {
+		switch f.Rel {
+		case "wicked/Bust/a.zip":
+			if f.Hidden || f.ModUnix != old.Unix() || f.ChangeUnix < time.Now().Add(-time.Minute).Unix() {
+				t.Errorf("a.zip: %+v", f)
+			}
+		case "wicked/Bust/.b.zip.Xy12Ab":
+			if !f.Hidden {
+				t.Errorf("temp file not hidden: %+v", f)
+			}
+		}
 	}
 }

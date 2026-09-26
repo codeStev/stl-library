@@ -24,6 +24,13 @@ type File struct {
 	Entry   string // the entry inside the archive
 	Size    int64
 	ModUnix int64
+	// ChangeUnix is the file system's change time (ctime): unlike the
+	// modification time, which downloaders set to the original's, it moves
+	// on every write and rename. 0 if unknown.
+	ChangeUnix int64
+	// Hidden files (".name…") are never imported; other than known junk
+	// they are a downloader's temporary files.
+	Hidden bool
 }
 
 // Unit is one download folder that becomes one model:
@@ -44,13 +51,18 @@ var reTemp = regexp.MustCompile(`(?i)\.(partial|part|crdownload|tmp|download|!qb
 // is returned when it is not.
 func Settled(u Unit, now time.Time, window time.Duration) (bool, string) {
 	var newest int64
+	visible := 0
 	for _, f := range u.Files {
-		if reTemp.MatchString(f.Rel) {
-			return false, "still downloading (" + path.Base(f.Rel) + ")"
+		name := path.Base(f.Rel)
+		if reTemp.MatchString(f.Rel) || f.Hidden && !hiddenJunk(name) {
+			return false, "still downloading (" + name + ")"
 		}
-		newest = max(newest, f.ModUnix)
+		newest = max(newest, f.ModUnix, f.ChangeUnix)
+		if !f.Hidden {
+			visible++
+		}
 	}
-	if len(u.Files) == 0 {
+	if visible == 0 {
 		return false, "empty"
 	}
 	if age := now.Sub(time.Unix(newest, 0)); age < window {
@@ -59,11 +71,16 @@ func Settled(u Unit, now time.Time, window time.Duration) (bool, string) {
 	return true, ""
 }
 
+func hiddenJunk(name string) bool { return name == ".DS_Store" || strings.HasPrefix(name, "._") }
+
 // Signature changes whenever files of the unit are added, removed or
 // changed.
 func Signature(files []File) string {
 	lines := make([]string, 0, len(files))
 	for _, f := range files {
+		if f.Hidden {
+			continue
+		}
 		lines = append(lines, f.Rel+"|"+strconv.FormatInt(f.Size, 10)+"|"+strconv.FormatInt(f.ModUnix, 10))
 	}
 	sort.Strings(lines)
@@ -159,6 +176,9 @@ func Placements(u Unit, files []File, creatorDir string) []Placement {
 	items := make([]item, 0, len(files))
 	anySupports, splitScales := false, map[string]bool{}
 	for _, f := range files {
+		if f.Hidden {
+			continue
+		}
 		dir, name := path.Split(f.Rel)
 		it := item{f: f, print: convention.Printable(ext(name))}
 		for _, seg := range strings.Split(strings.Trim(dir, "/"), "/") {
