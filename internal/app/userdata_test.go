@@ -1,0 +1,52 @@
+package app
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+)
+
+type userStore struct {
+	Store
+	tags     []string
+	name     string
+	printed  int64
+	dequeued bool
+}
+
+func (u *userStore) SetTags(_ context.Context, _ int64, t []string) error { u.tags = t; return nil }
+func (u *userStore) SetDisplayName(_ context.Context, _ int64, n string) error {
+	u.name = n
+	return nil
+}
+func (u *userStore) AddPrint(_ context.Context, _ int64, at int64, note string) (Print, error) {
+	u.printed = at
+	return Print{ID: 1, AtUnix: at, Note: note}, nil
+}
+func (u *userStore) Dequeue(context.Context, int64) error { u.dequeued = true; return ErrNotFound }
+
+func TestUserDataNormalizesAndValidates(t *testing.T) {
+	s := &userStore{}
+	u := UserData{Store: s, Now: func() time.Time { return time.Unix(1000, 0) }}
+	ctx := context.Background()
+	tags, _ := u.SetTags(ctx, 1, []string{" a ", "A", "b"})
+	if strings.Join(tags, ",") != "a,b" || strings.Join(s.tags, ",") != "a,b" {
+		t.Errorf("tags %v / %v", tags, s.tags)
+	}
+	u.SetDisplayName(ctx, 1, "  Bell   Head ")
+	if s.name != "Bell Head" {
+		t.Errorf("name %q", s.name)
+	}
+	if err := u.SetDisplayName(ctx, 1, strings.Repeat("x", 201)); !errors.Is(err, ErrInvalid) {
+		t.Errorf("long name: %v", err)
+	}
+	p, err := u.MarkPrinted(ctx, 1, " ok ")
+	if err != nil || p.AtUnix != 1000 || p.Note != "ok" || !s.dequeued {
+		t.Errorf("print %+v %v dequeued=%v", p, err, s.dequeued)
+	}
+	if _, err := u.MarkPrinted(ctx, 1, strings.Repeat("x", 501)); !errors.Is(err, ErrInvalid) {
+		t.Errorf("long note: %v", err)
+	}
+}

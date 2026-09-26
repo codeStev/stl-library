@@ -11,6 +11,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"github.com/codeStev/stl-library/convention"
 	"github.com/codeStev/stl-library/internal/app"
 	"github.com/codeStev/stl-library/internal/core/library"
 )
@@ -72,6 +73,25 @@ var migrations = []string{
 	CREATE INDEX image_model ON image(model_id);
 	CREATE TABLE issue (dir TEXT PRIMARY KEY, reason TEXT NOT NULL);
 	CREATE VIRTUAL TABLE model_fts USING fts5(name, creator, release, category, tokenize='unicode61 remove_diacritics 2');`,
+
+	// User data, keyed by folder (not by id) and never touched by Sync, so
+	// it survives rescans - even a model that is gone for a while.
+	`CREATE TABLE model_user (dir TEXT PRIMARY KEY, display_name TEXT NOT NULL DEFAULT '');
+	CREATE TABLE tag (dir TEXT NOT NULL, tag TEXT NOT NULL, PRIMARY KEY (dir, tag));
+	CREATE INDEX tag_tag ON tag(tag);
+	CREATE TABLE print (
+		id INTEGER PRIMARY KEY, dir TEXT NOT NULL, variant_dir TEXT NOT NULL,
+		printed_unix INTEGER NOT NULL, note TEXT NOT NULL
+	);
+	CREATE INDEX print_dir ON print(dir);
+	CREATE INDEX print_variant ON print(variant_dir);
+	CREATE TABLE queue (
+		id INTEGER PRIMARY KEY, dir TEXT NOT NULL, variant_dir TEXT NOT NULL UNIQUE,
+		added_unix INTEGER NOT NULL, note TEXT NOT NULL
+	);
+	DROP TABLE model_fts;
+	CREATE VIRTUAL TABLE model_fts USING fts5(name, creator, release, category, display, tags, tokenize='unicode61 remove_diacritics 2');
+	INSERT INTO model_fts (rowid, name, creator, release, category, display, tags) SELECT id, name, creator, release, category, '', '' FROM model;`,
 }
 
 func migrate(db *sql.DB) error {
@@ -196,14 +216,13 @@ func (s *Store) writeModel(ctx context.Context, tx *sql.Tx, id int64, m *library
 			m.Creator, m.Release, m.Category, m.Name, len(m.Variants), parts, bytes, sig, id); err != nil {
 			return err
 		}
-		for _, q := range []string{`DELETE FROM variant WHERE model_id = ?`, `DELETE FROM image WHERE model_id = ?`, `DELETE FROM model_fts WHERE rowid = ?`} {
+		for _, q := range []string{`DELETE FROM variant WHERE model_id = ?`, `DELETE FROM image WHERE model_id = ?`} {
 			if _, err := tx.ExecContext(ctx, q, id); err != nil {
 				return err
 			}
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO model_fts (rowid, name, creator, release, category) VALUES (?,?,?,?,?)`,
-		id, m.Name, m.Creator, m.Release, m.Category); err != nil {
+	if err := writeFTS(ctx, tx, id); err != nil {
 		return err
 	}
 	for _, v := range m.Variants {
@@ -229,6 +248,24 @@ func (s *Store) writeModel(ctx context.Context, tx *sql.Tx, id int64, m *library
 		}
 	}
 	return nil
+}
+
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+// writeFTS (re)writes the search row of a model, with its display name
+// and tags.
+func writeFTS(ctx context.Context, tx execer, id int64) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM model_fts WHERE rowid = ?`, id); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO model_fts (rowid, name, creator, release, category, display, tags)
+		SELECT m.id, m.name, m.creator, m.release, m.category,
+			coalesce((SELECT display_name FROM model_user u WHERE u.dir = m.dir), ''),
+			coalesce((SELECT group_concat(tag, ' ') FROM tag t WHERE t.dir = m.dir), '')
+		FROM model m WHERE m.id = ?`, id)
+	return err
 }
 
 // syncIssues replaces the issue list, writing only differences.
@@ -274,16 +311,27 @@ func (s *Store) Search(ctx context.Context, q app.Query) ([]app.ModelSummary, er
 	var where []string
 	var args []any
 	from := `model m`
-	order := `m.creator, m.release, m.name`
+	order := `m.creator, m.release, coalesce(nullif((SELECT display_name FROM model_user u WHERE u.dir = m.dir), ''), m.name) COLLATE NOCASE`
 	if match := ftsQuery(q.Text); match != "" {
 		from = `model_fts f JOIN model m ON m.id = f.rowid`
 		where = append(where, `model_fts MATCH ?`)
 		args = append(args, match)
-		order = `bm25(model_fts, 10, 2, 3, 1), m.name`
+		order = `bm25(model_fts, 10, 2, 3, 1, 10, 5), m.name`
 	}
 	if q.Creator != "" {
 		where = append(where, `m.creator = ?`)
 		args = append(args, q.Creator)
+	}
+	if q.Tag != "" {
+		where = append(where, `EXISTS (SELECT 1 FROM tag t WHERE t.dir = m.dir AND t.tag = ? COLLATE NOCASE)`)
+		args = append(args, q.Tag)
+	}
+	if q.Printed != nil {
+		not := "NOT "
+		if *q.Printed {
+			not = ""
+		}
+		where = append(where, not+`EXISTS (SELECT 1 FROM print pr WHERE pr.dir = m.dir)`)
 	}
 	query := `SELECT ` + summaryCols + ` FROM ` + from
 	if len(where) > 0 {
@@ -323,10 +371,21 @@ func ftsQuery(text string) string {
 const summaryCols = `m.id, m.creator, m.release, m.category, m.name, m.dir, m.variants, m.parts, m.bytes,
 	coalesce((SELECT i.id FROM image i WHERE i.model_id = m.id AND (lower(i.path) LIKE '%.jpg' OR lower(i.path) LIKE '%.jpeg'
 		OR lower(i.path) LIKE '%.png' OR lower(i.path) LIKE '%.webp' OR lower(i.path) LIKE '%.gif') ORDER BY i.path LIMIT 1), 0),
-	EXISTS (SELECT 1 FROM variant v JOIN part p ON p.variant_id = v.id WHERE v.model_id = m.id AND lower(p.path) LIKE '%.stl')`
+	EXISTS (SELECT 1 FROM variant v JOIN part p ON p.variant_id = v.id WHERE v.model_id = m.id AND lower(p.path) LIKE '%.stl'),
+	coalesce((SELECT display_name FROM model_user u WHERE u.dir = m.dir), ''),
+	coalesce((SELECT group_concat(tag, char(31)) FROM (SELECT tag FROM tag t WHERE t.dir = m.dir ORDER BY tag COLLATE NOCASE)), ''),
+	(SELECT count(*) FROM print pr WHERE pr.dir = m.dir)`
 
 func scanSummary(row interface{ Scan(...any) error }, m *app.ModelSummary) error {
-	return row.Scan(&m.ID, &m.Creator, &m.Release, &m.Category, &m.Name, &m.Dir, &m.Variants, &m.Parts, &m.Bytes, &m.Cover, &m.Renderable)
+	var tags string
+	if err := row.Scan(&m.ID, &m.Creator, &m.Release, &m.Category, &m.Name, &m.Dir, &m.Variants, &m.Parts, &m.Bytes,
+		&m.Cover, &m.Renderable, &m.DisplayName, &tags, &m.Prints); err != nil {
+		return err
+	}
+	if tags != "" {
+		m.Tags = strings.Split(tags, "\x1f")
+	}
+	return nil
 }
 
 func notFound(err error) error {
@@ -384,6 +443,26 @@ func (s *Store) Variant(ctx context.Context, id int64) (*app.VariantDetail, erro
 	if v.Parts, err = s.files(ctx, `SELECT id, path, size, mod_unix FROM part WHERE variant_id = ? ORDER BY path`, id); err != nil {
 		return nil, err
 	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id, printed_unix, note, variant_dir FROM print WHERE variant_dir = ? ORDER BY printed_unix DESC, id DESC`, v.Dir)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var p app.Print
+		if err := rows.Scan(&p.ID, &p.AtUnix, &p.Note, &p.Variant); err != nil {
+			return nil, err
+		}
+		v.Prints = append(v.Prints, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var queued int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM queue WHERE variant_dir = ?`, v.Dir).Scan(&queued); err != nil {
+		return nil, err
+	}
+	v.Queued = queued > 0
 	return &v, nil
 }
 
@@ -454,6 +533,170 @@ func (s *Store) Issues(ctx context.Context) ([]library.Issue, error) {
 			return nil, err
 		}
 		out = append(out, i)
+	}
+	return out, rows.Err()
+}
+
+// modelDir resolves a model id to its folder, the key of user data.
+func (s *Store) modelDir(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, id int64) (string, error) {
+	var dir string
+	if err := q.QueryRowContext(ctx, `SELECT dir FROM model WHERE id = ?`, id).Scan(&dir); err != nil {
+		return "", notFound(err)
+	}
+	return dir, nil
+}
+
+// SetTags replaces a model's tags.
+func (s *Store) SetTags(ctx context.Context, modelID int64, tags []string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	dir, err := s.modelDir(ctx, tx, modelID)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM tag WHERE dir = ?`, dir); err != nil {
+		return err
+	}
+	for _, t := range tags {
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO tag (dir, tag) VALUES (?, ?)`, dir, t); err != nil {
+			return err
+		}
+	}
+	if err := writeFTS(ctx, tx, modelID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// SetDisplayName sets (or with "" clears) a model's display name.
+func (s *Store) SetDisplayName(ctx context.Context, modelID int64, name string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	dir, err := s.modelDir(ctx, tx, modelID)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO model_user (dir, display_name) VALUES (?, ?)
+		ON CONFLICT(dir) DO UPDATE SET display_name = excluded.display_name`, dir, name); err != nil {
+		return err
+	}
+	if err := writeFTS(ctx, tx, modelID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// Tags lists every tag with the number of models (present in the
+// library) carrying it.
+func (s *Store) Tags(ctx context.Context) ([]app.TagCount, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT t.tag, count(*) FROM tag t JOIN model m ON m.dir = t.dir
+		GROUP BY t.tag COLLATE NOCASE ORDER BY t.tag COLLATE NOCASE`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []app.TagCount
+	for rows.Next() {
+		var t app.TagCount
+		if err := rows.Scan(&t.Tag, &t.Models); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// variantDirs resolves a variant id to its folder and its model's folder.
+func (s *Store) variantDirs(ctx context.Context, variantID int64) (modelDir, variantDir string, err error) {
+	err = s.db.QueryRowContext(ctx, `SELECT m.dir, v.dir FROM variant v JOIN model m ON m.id = v.model_id WHERE v.id = ?`, variantID).
+		Scan(&modelDir, &variantDir)
+	return modelDir, variantDir, notFound(err)
+}
+
+// AddPrint records a print of a variant.
+func (s *Store) AddPrint(ctx context.Context, variantID, atUnix int64, note string) (app.Print, error) {
+	mdir, vdir, err := s.variantDirs(ctx, variantID)
+	if err != nil {
+		return app.Print{}, err
+	}
+	res, err := s.db.ExecContext(ctx, `INSERT INTO print (dir, variant_dir, printed_unix, note) VALUES (?,?,?,?)`, mdir, vdir, atUnix, note)
+	if err != nil {
+		return app.Print{}, err
+	}
+	id, err := res.LastInsertId()
+	return app.Print{ID: id, AtUnix: atUnix, Note: note, Variant: vdir}, err
+}
+
+// DeletePrint removes a print record.
+func (s *Store) DeletePrint(ctx context.Context, id int64) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM print WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return app.ErrNotFound
+	}
+	return nil
+}
+
+// Enqueue puts a variant on the print queue; one already queued keeps its
+// place (the note is updated).
+func (s *Store) Enqueue(ctx context.Context, variantID, atUnix int64, note string) error {
+	mdir, vdir, err := s.variantDirs(ctx, variantID)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO queue (dir, variant_dir, added_unix, note) VALUES (?,?,?,?)
+		ON CONFLICT(variant_dir) DO UPDATE SET note = excluded.note`, mdir, vdir, atUnix, note)
+	return err
+}
+
+// Dequeue takes a variant off the queue.
+func (s *Store) Dequeue(ctx context.Context, variantID int64) error {
+	_, vdir, err := s.variantDirs(ctx, variantID)
+	if err != nil {
+		return err
+	}
+	res, err := s.db.ExecContext(ctx, `DELETE FROM queue WHERE variant_dir = ?`, vdir)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return app.ErrNotFound
+	}
+	return nil
+}
+
+// Queue lists queued variants that are in the library, oldest first.
+func (s *Store) Queue(ctx context.Context) ([]app.QueueItem, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT v.id, m.id, coalesce(nullif(u.display_name, ''), m.name), v.dir, m.dir, v.option,
+			v.scale, v.supports, v.density, v.format, v.fill, v.split, v.tech, v.extra, q.added_unix, q.note
+		FROM queue q JOIN variant v ON v.dir = q.variant_dir JOIN model m ON m.id = v.model_id
+		LEFT JOIN model_user u ON u.dir = m.dir
+		ORDER BY q.added_unix, q.id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []app.QueueItem
+	for rows.Next() {
+		var it app.QueueItem
+		var vdir, mdir, option string
+		var d convention.Dims
+		if err := rows.Scan(&it.VariantID, &it.ModelID, &it.Model, &vdir, &mdir, &option,
+			&d.Scale, &d.Supports, &d.Density, &d.Format, &d.Fill, &d.Split, &d.Tech, &d.Extra, &it.AddedUnix, &it.Note); err != nil {
+			return nil, err
+		}
+		it.Label = strings.TrimSpace(strings.Join(convention.CanonicalSegments(d), " ") + " " + option)
+		out = append(out, it)
 	}
 	return out, rows.Err()
 }

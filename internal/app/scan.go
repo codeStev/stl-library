@@ -20,6 +20,16 @@ type Store interface {
 	Variant(ctx context.Context, id int64) (*VariantDetail, error)
 	Image(ctx context.Context, id int64) (*FileRef, error)
 	Part(ctx context.Context, id int64) (*FileRef, error)
+
+	// User data, keyed by folder so it survives rescans.
+	SetTags(ctx context.Context, modelID int64, tags []string) error
+	SetDisplayName(ctx context.Context, modelID int64, name string) error
+	Tags(ctx context.Context) ([]TagCount, error)
+	AddPrint(ctx context.Context, variantID int64, atUnix int64, note string) (Print, error)
+	DeletePrint(ctx context.Context, id int64) error
+	Enqueue(ctx context.Context, variantID int64, atUnix int64, note string) error
+	Dequeue(ctx context.Context, variantID int64) error
+	Queue(ctx context.Context) ([]QueueItem, error)
 }
 
 // ErrNotFound is returned by a Store for an unknown id.
@@ -36,6 +46,8 @@ type SyncStats struct {
 type Query struct {
 	Text    string
 	Creator string
+	Tag     string
+	Printed *bool // only printed (true) or never printed (false) models
 	Limit   int
 	Offset  int
 }
@@ -54,6 +66,10 @@ type ModelSummary struct {
 	Cover    int64 // id of the model's first image (jpg/png/webp/gif), 0 if none
 	// Renderable: the model has an STL a preview can be rendered from.
 	Renderable bool
+	// User data.
+	DisplayName string // replaces Name for display when set
+	Tags        []string
+	Prints      int // how often a variant of it was printed
 }
 
 // ModelDetail is a model with its variants and images.
@@ -71,6 +87,32 @@ type VariantDetail struct {
 	Option  string
 	Dir     string
 	Parts   []FileRef
+	Prints  []Print
+	Queued  bool
+}
+
+// Print records that a variant was printed.
+type Print struct {
+	ID      int64
+	AtUnix  int64
+	Note    string
+	Variant string // variant folder
+}
+
+// TagCount is a tag with the number of models carrying it.
+type TagCount struct {
+	Tag    string
+	Models int
+}
+
+// QueueItem is a variant waiting to be printed.
+type QueueItem struct {
+	VariantID int64
+	ModelID   int64
+	Model     string // display name or name
+	Label     string // variant levels and option, e.g. "32mm Supported Lychee"
+	AddedUnix int64
+	Note      string
 }
 
 // FileRef is a file of the library by id and path.

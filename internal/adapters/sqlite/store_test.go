@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 
@@ -220,5 +221,144 @@ func TestModelDetailVariantsImagesCreatorsIssues(t *testing.T) {
 	page2, _ := s.Search(ctx, app.Query{Creator: "Loot Studios", Limit: 1, Offset: 1})
 	if len(page2) != 1 || page2[0].Name != "Élise the Brave" {
 		t.Errorf("offset: %+v", page2)
+	}
+}
+
+func TestUserDataIsSearchableAndSurvivesRescansAndAbsence(t *testing.T) {
+	s, ctx := open(t), context.Background()
+	if _, err := sync(s, libraryV1...); err != nil {
+		t.Fatal(err)
+	}
+	find := func(q app.Query) []app.ModelSummary {
+		t.Helper()
+		q.Limit = 10
+		hits, err := s.Search(ctx, q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return hits
+	}
+	bell := find(app.Query{Text: "bell"})[0]
+	if err := s.SetTags(ctx, bell.ID, []string{"Painted", "Dragon Slayer"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetDisplayName(ctx, bell.ID, "Bellringer of Doom"); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []app.Query{{Text: "doom"}, {Text: "slayer"}, {Tag: "painted"}} {
+		hits := find(q)
+		if len(hits) != 1 || hits[0].ID != bell.ID || hits[0].DisplayName != "Bellringer of Doom" || len(hits[0].Tags) != 2 {
+			t.Errorf("%+v: %+v", q, hits)
+		}
+	}
+	// A changed model (rewritten in place) and a rescan keep the user data.
+	changed := append(append([]string{}, libraryV1...), "Loot Studios/Abyssal Haze/Enemies/Bell Head/75mm/Supported/b.stl")
+	if _, err := sync(s, changed...); err != nil {
+		t.Fatal(err)
+	}
+	if hits := find(app.Query{Text: "doom"}); len(hits) != 1 {
+		t.Errorf("after update: %+v", hits)
+	}
+	// Gone for one scan, back in the next: the data is still attached.
+	if _, err := sync(s, libraryV1[3:]...); err != nil {
+		t.Fatal(err)
+	}
+	if tags, _ := s.Tags(ctx); len(tags) != 0 {
+		t.Errorf("tags of absent models listed: %+v", tags)
+	}
+	if _, err := sync(s, libraryV1...); err != nil {
+		t.Fatal(err)
+	}
+	back := find(app.Query{Tag: "Dragon Slayer"})
+	if len(back) != 1 || back[0].DisplayName != "Bellringer of Doom" {
+		t.Errorf("after coming back: %+v", back)
+	}
+	if tags, _ := s.Tags(ctx); len(tags) != 2 || tags[0].Tag != "Dragon Slayer" || tags[0].Models != 1 {
+		t.Errorf("tags: %+v", tags)
+	}
+	// Clearing the display name goes back to the folder name.
+	s.SetDisplayName(ctx, back[0].ID, "")
+	if hits := find(app.Query{Text: "bell"}); hits[0].DisplayName != "" {
+		t.Errorf("display name not cleared: %+v", hits[0])
+	}
+	if err := s.SetTags(ctx, 9999, nil); err != app.ErrNotFound {
+		t.Errorf("unknown model: %v", err)
+	}
+}
+
+func TestPrintsAndQueue(t *testing.T) {
+	s, ctx := open(t), context.Background()
+	if _, err := sync(s, libraryV1...); err != nil {
+		t.Fatal(err)
+	}
+	hits, _ := s.Search(ctx, app.Query{Text: "bell", Limit: 1})
+	m, _ := s.Model(ctx, hits[0].ID)
+	v1, v2 := m.Variants[0], m.Variants[1]
+
+	if err := s.Enqueue(ctx, v2.ID, 100, "first"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Enqueue(ctx, v1.ID, 200, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Enqueue(ctx, v2.ID, 300, "updated note"); err != nil { // keeps its place
+		t.Fatal(err)
+	}
+	q, _ := s.Queue(ctx)
+	if len(q) != 2 || q[0].VariantID != v2.ID || q[0].Note != "updated note" || q[0].Label != "32mm Supported" || q[0].Model != "Bell Head" {
+		t.Fatalf("queue: %+v", q)
+	}
+
+	p, err := s.AddPrint(ctx, v2.ID, 400, "grey primer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	printed, never := true, false
+	if hits, _ := s.Search(ctx, app.Query{Printed: &printed, Limit: 10}); len(hits) != 1 || hits[0].Prints != 1 {
+		t.Errorf("printed filter: %+v", hits)
+	}
+	if hits, _ := s.Search(ctx, app.Query{Printed: &never, Limit: 10}); len(hits) != 2 {
+		t.Errorf("never printed: %+v", hits)
+	}
+	v, _ := s.Variant(ctx, v2.ID)
+	if len(v.Prints) != 1 || v.Prints[0].Note != "grey primer" || !v.Queued {
+		t.Errorf("variant: %+v", v)
+	}
+	if err := s.Dequeue(ctx, v2.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Dequeue(ctx, v2.ID); err != app.ErrNotFound {
+		t.Errorf("dequeue twice: %v", err)
+	}
+	if err := s.DeletePrint(ctx, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeletePrint(ctx, p.ID); err != app.ErrNotFound {
+		t.Errorf("delete twice: %v", err)
+	}
+	if _, err := s.AddPrint(ctx, 9999, 1, ""); err != app.ErrNotFound {
+		t.Errorf("unknown variant: %v", err)
+	}
+}
+
+func TestMigratingAVersion1IndexKeepsItsModelsSearchable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(migrations[0] + `; PRAGMA user_version = 1;
+		INSERT INTO model (dir, creator, release, category, name, variants, parts, bytes, sig) VALUES ('C/R/Old One', 'C', 'R', '', 'Old One', 0, 0, 0, 'x');
+		INSERT INTO model_fts (rowid, name, creator, release, category) VALUES (1, 'Old One', 'C', 'R', '')`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if hits, err := s.Search(context.Background(), app.Query{Text: "old", Limit: 5}); err != nil || len(hits) != 1 {
+		t.Errorf("after migration: %v %v", hits, err)
 	}
 }
