@@ -7,6 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/codeStev/stl-library/convention"
 	"github.com/codeStev/stl-library/internal/core/library"
 )
 
@@ -67,4 +68,51 @@ func (u UserData) Enqueue(ctx context.Context, variantID int64, note string) err
 		return ErrInvalid
 	}
 	return u.Store.Enqueue(ctx, variantID, u.now(), strings.TrimSpace(note))
+}
+
+// SetHidden hides a model from the library, or shows it again.
+func (u UserData) SetHidden(ctx context.Context, modelID int64, hidden bool) error {
+	return u.Store.SetHidden(ctx, modelID, hidden)
+}
+
+// Relabel overrides what a variant's folders say about it. Every value
+// must be a canonical one (see package convention); an empty label is
+// refused - use ResetLabel.
+func (u UserData) Relabel(ctx context.Context, variantID int64, l VariantLabel) error {
+	l.Option = strings.Join(strings.Fields(l.Option), " ")
+	if !validLabel(l) {
+		return ErrInvalid
+	}
+	return u.Store.SetVariantLabel(ctx, variantID, &l)
+}
+
+// ResetLabel goes back to what the folders say.
+func (u UserData) ResetLabel(ctx context.Context, variantID int64) error {
+	return u.Store.SetVariantLabel(ctx, variantID, nil)
+}
+
+func validLabel(l VariantLabel) bool {
+	d := l.Dims
+	if !d.Any() && l.Option == "" || utf8.RuneCountInString(l.Option) > 100 {
+		return false
+	}
+	in := func(v string, list []string) bool {
+		if v == "" {
+			return true
+		}
+		for _, x := range list {
+			if x == v {
+				return true
+			}
+		}
+		return false
+	}
+	if d.Scale != "" {
+		if pd, ok := convention.ParseSegment(d.Scale); !ok || pd.Scale != d.Scale {
+			return false
+		}
+	}
+	return in(d.Supports, convention.Supports) && in(d.Density, convention.Densities) && in(d.Format, convention.Formats) &&
+		in(d.Fill, convention.Fills) && in(d.Split, []string{"Parts", "Combined"}) && in(d.Tech, convention.Techs) &&
+		in(d.Extra, convention.Extras)
 }

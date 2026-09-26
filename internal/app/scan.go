@@ -27,6 +27,8 @@ type Store interface {
 	Tags(ctx context.Context) ([]TagCount, error)
 	AddPrint(ctx context.Context, variantID int64, atUnix int64, note string) (Print, error)
 	DeletePrint(ctx context.Context, id int64) error
+	SetHidden(ctx context.Context, modelID int64, hidden bool) error
+	SetVariantLabel(ctx context.Context, variantID int64, label *VariantLabel) error
 	Enqueue(ctx context.Context, variantID int64, atUnix int64, note string) error
 	Dequeue(ctx context.Context, variantID int64) error
 	Queue(ctx context.Context) ([]QueueItem, error)
@@ -48,6 +50,7 @@ type Query struct {
 	Creator string
 	Tag     string
 	Printed *bool // only printed (true) or never printed (false) models
+	Hidden  bool  // include hidden models
 	Limit   int
 	Offset  int
 }
@@ -70,6 +73,7 @@ type ModelSummary struct {
 	DisplayName string // replaces Name for display when set
 	Tags        []string
 	Prints      int // how often a variant of it was printed
+	Hidden      bool
 }
 
 // ModelDetail is a model with its variants and images.
@@ -89,6 +93,14 @@ type VariantDetail struct {
 	Parts   []FileRef
 	Prints  []Print
 	Queued  bool
+	// Relabeled: Dims and Option come from a correction, not the folders.
+	Relabeled bool
+}
+
+// VariantLabel is a correction of a variant's dimensions and option.
+type VariantLabel struct {
+	Dims   convention.Dims
+	Option string
 }
 
 // Print records that a variant was printed.

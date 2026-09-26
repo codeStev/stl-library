@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/codeStev/stl-library/convention"
 )
 
 type userStore struct {
@@ -48,5 +50,50 @@ func TestUserDataNormalizesAndValidates(t *testing.T) {
 	}
 	if _, err := u.MarkPrinted(ctx, 1, strings.Repeat("x", 501)); !errors.Is(err, ErrInvalid) {
 		t.Errorf("long note: %v", err)
+	}
+}
+
+type labelStore struct {
+	Store
+	label *VariantLabel
+}
+
+func (l *labelStore) SetVariantLabel(_ context.Context, _ int64, v *VariantLabel) error {
+	l.label = v
+	return nil
+}
+
+func TestRelabelAcceptsOnlyCanonicalValues(t *testing.T) {
+	s := &labelStore{}
+	u := UserData{Store: s}
+	ctx := context.Background()
+	ok := []VariantLabel{
+		{Dims: convention.Dims{Scale: "32mm", Supports: "Supported", Format: "Lychee"}},
+		{Dims: convention.Dims{Scale: "1-10", Split: "Combined"}},
+		{Option: "  Helmet   Version "},
+	}
+	for _, l := range ok {
+		if err := u.Relabel(ctx, 1, l); err != nil {
+			t.Errorf("%+v: %v", l, err)
+		}
+	}
+	if s.label.Option != "Helmet Version" {
+		t.Errorf("option not normalized: %q", s.label.Option)
+	}
+	bad := []VariantLabel{
+		{},
+		{Dims: convention.Dims{Scale: "32 mm"}},
+		{Dims: convention.Dims{Supports: "Presupported"}},
+		{Dims: convention.Dims{Format: "lys"}},
+		{Option: strings.Repeat("x", 101)},
+	}
+	for _, l := range bad {
+		if err := u.Relabel(ctx, 1, l); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%+v accepted", l)
+		}
+	}
+	u.ResetLabel(ctx, 1)
+	if s.label != nil {
+		t.Error("reset")
 	}
 }

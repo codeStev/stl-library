@@ -92,6 +92,22 @@ var migrations = []string{
 	DROP TABLE model_fts;
 	CREATE VIRTUAL TABLE model_fts USING fts5(name, creator, release, category, display, tags, tokenize='unicode61 remove_diacritics 2');
 	INSERT INTO model_fts (rowid, name, creator, release, category, display, tags) SELECT id, name, creator, release, category, '', '' FROM model;`,
+
+	// What the importer did with each download folder.
+	`CREATE TABLE import_unit (
+		source TEXT PRIMARY KEY, signature TEXT NOT NULL, state TEXT NOT NULL, target TEXT NOT NULL,
+		files INTEGER NOT NULL, message TEXT NOT NULL, updated_unix INTEGER NOT NULL
+	);
+	CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);`,
+
+	// Corrections, by folder like all user data: hidden models, and
+	// variant labels overriding what the folder names say.
+	`ALTER TABLE model_user ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0;
+	CREATE TABLE variant_label (
+		dir TEXT PRIMARY KEY, option TEXT NOT NULL,
+		scale TEXT NOT NULL, supports TEXT NOT NULL, density TEXT NOT NULL, format TEXT NOT NULL,
+		fill TEXT NOT NULL, split TEXT NOT NULL, tech TEXT NOT NULL, extra TEXT NOT NULL
+	);`,
 }
 
 func migrate(db *sql.DB) error {
@@ -326,6 +342,9 @@ func (s *Store) Search(ctx context.Context, q app.Query) ([]app.ModelSummary, er
 		where = append(where, `EXISTS (SELECT 1 FROM tag t WHERE t.dir = m.dir AND t.tag = ? COLLATE NOCASE)`)
 		args = append(args, q.Tag)
 	}
+	if !q.Hidden {
+		where = append(where, `NOT EXISTS (SELECT 1 FROM model_user u WHERE u.dir = m.dir AND u.hidden)`)
+	}
 	if q.Printed != nil {
 		not := "NOT "
 		if *q.Printed {
@@ -374,12 +393,13 @@ const summaryCols = `m.id, m.creator, m.release, m.category, m.name, m.dir, m.va
 	EXISTS (SELECT 1 FROM variant v JOIN part p ON p.variant_id = v.id WHERE v.model_id = m.id AND lower(p.path) LIKE '%.stl'),
 	coalesce((SELECT display_name FROM model_user u WHERE u.dir = m.dir), ''),
 	coalesce((SELECT group_concat(tag, char(31)) FROM (SELECT tag FROM tag t WHERE t.dir = m.dir ORDER BY tag COLLATE NOCASE)), ''),
-	(SELECT count(*) FROM print pr WHERE pr.dir = m.dir)`
+	(SELECT count(*) FROM print pr WHERE pr.dir = m.dir),
+	coalesce((SELECT hidden FROM model_user u WHERE u.dir = m.dir), 0)`
 
 func scanSummary(row interface{ Scan(...any) error }, m *app.ModelSummary) error {
 	var tags string
 	if err := row.Scan(&m.ID, &m.Creator, &m.Release, &m.Category, &m.Name, &m.Dir, &m.Variants, &m.Parts, &m.Bytes,
-		&m.Cover, &m.Renderable, &m.DisplayName, &tags, &m.Prints); err != nil {
+		&m.Cover, &m.Renderable, &m.DisplayName, &tags, &m.Prints, &m.Hidden); err != nil {
 		return err
 	}
 	if tags != "" {
@@ -435,8 +455,11 @@ func (s *Store) Model(ctx context.Context, id int64) (*app.ModelDetail, error) {
 func (s *Store) Variant(ctx context.Context, id int64) (*app.VariantDetail, error) {
 	v := app.VariantDetail{ID: id}
 	d := &v.Dims
-	err := s.db.QueryRowContext(ctx, `SELECT model_id, dir, option, scale, supports, density, format, fill, split, tech, extra FROM variant WHERE id = ?`, id).
-		Scan(&v.ModelID, &v.Dir, &v.Option, &d.Scale, &d.Supports, &d.Density, &d.Format, &d.Fill, &d.Split, &d.Tech, &d.Extra)
+	err := s.db.QueryRowContext(ctx, `SELECT v.model_id, v.dir, coalesce(l.option, v.option),
+			coalesce(l.scale, v.scale), coalesce(l.supports, v.supports), coalesce(l.density, v.density), coalesce(l.format, v.format),
+			coalesce(l.fill, v.fill), coalesce(l.split, v.split), coalesce(l.tech, v.tech), coalesce(l.extra, v.extra), l.dir IS NOT NULL
+		FROM variant v LEFT JOIN variant_label l ON l.dir = v.dir WHERE v.id = ?`, id).
+		Scan(&v.ModelID, &v.Dir, &v.Option, &d.Scale, &d.Supports, &d.Density, &d.Format, &d.Fill, &d.Split, &d.Tech, &d.Extra, &v.Relabeled)
 	if err != nil {
 		return nil, notFound(err)
 	}
@@ -677,10 +700,11 @@ func (s *Store) Dequeue(ctx context.Context, variantID int64) error {
 
 // Queue lists queued variants that are in the library, oldest first.
 func (s *Store) Queue(ctx context.Context) ([]app.QueueItem, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT v.id, m.id, coalesce(nullif(u.display_name, ''), m.name), v.dir, m.dir, v.option,
-			v.scale, v.supports, v.density, v.format, v.fill, v.split, v.tech, v.extra, q.added_unix, q.note
+	rows, err := s.db.QueryContext(ctx, `SELECT v.id, m.id, coalesce(nullif(u.display_name, ''), m.name), v.dir, m.dir, coalesce(l.option, v.option),
+			coalesce(l.scale, v.scale), coalesce(l.supports, v.supports), coalesce(l.density, v.density), coalesce(l.format, v.format),
+			coalesce(l.fill, v.fill), coalesce(l.split, v.split), coalesce(l.tech, v.tech), coalesce(l.extra, v.extra), q.added_unix, q.note
 		FROM queue q JOIN variant v ON v.dir = q.variant_dir JOIN model m ON m.id = v.model_id
-		LEFT JOIN model_user u ON u.dir = m.dir
+		LEFT JOIN model_user u ON u.dir = m.dir LEFT JOIN variant_label l ON l.dir = v.dir
 		ORDER BY q.added_unix, q.id`)
 	if err != nil {
 		return nil, err
@@ -699,4 +723,75 @@ func (s *Store) Queue(ctx context.Context) ([]app.QueueItem, error) {
 		out = append(out, it)
 	}
 	return out, rows.Err()
+}
+
+var _ app.ImportLog = (*Store)(nil)
+
+// ImportRecords lists every import record, most recently changed first.
+func (s *Store) ImportRecords(ctx context.Context) ([]app.ImportRecord, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT source, signature, state, target, files, message, updated_unix FROM import_unit ORDER BY updated_unix DESC, source`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []app.ImportRecord
+	for rows.Next() {
+		var r app.ImportRecord
+		if err := rows.Scan(&r.Source, &r.Signature, &r.State, &r.Target, &r.Files, &r.Message, &r.UpdatedUnix); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// SaveImport inserts or replaces a record.
+func (s *Store) SaveImport(ctx context.Context, r app.ImportRecord) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO import_unit (source, signature, state, target, files, message, updated_unix) VALUES (?,?,?,?,?,?,?)
+		ON CONFLICT(source) DO UPDATE SET signature=excluded.signature, state=excluded.state, target=excluded.target,
+			files=excluded.files, message=excluded.message, updated_unix=excluded.updated_unix`,
+		r.Source, r.Signature, r.State, r.Target, r.Files, r.Message, r.UpdatedUnix)
+	return err
+}
+
+func (s *Store) ImportBaselined(ctx context.Context) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM meta WHERE key = 'import_baselined'`).Scan(&n)
+	return n > 0, err
+}
+
+func (s *Store) SetImportBaselined(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO meta (key, value) VALUES ('import_baselined', '1')`)
+	return err
+}
+
+// SetHidden hides a model from the library (or shows it again).
+func (s *Store) SetHidden(ctx context.Context, modelID int64, hidden bool) error {
+	dir, err := s.modelDir(ctx, s.db, modelID)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO model_user (dir, hidden) VALUES (?, ?)
+		ON CONFLICT(dir) DO UPDATE SET hidden = excluded.hidden`, dir, hidden)
+	return err
+}
+
+// SetVariantLabel overrides a variant's dimensions and option; nil removes
+// the override.
+func (s *Store) SetVariantLabel(ctx context.Context, variantID int64, label *app.VariantLabel) error {
+	_, vdir, err := s.variantDirs(ctx, variantID)
+	if err != nil {
+		return err
+	}
+	if label == nil {
+		_, err = s.db.ExecContext(ctx, `DELETE FROM variant_label WHERE dir = ?`, vdir)
+		return err
+	}
+	d := label.Dims
+	_, err = s.db.ExecContext(ctx, `INSERT INTO variant_label (dir, option, scale, supports, density, format, fill, split, tech, extra)
+		VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(dir) DO UPDATE SET option=excluded.option, scale=excluded.scale,
+		supports=excluded.supports, density=excluded.density, format=excluded.format, fill=excluded.fill,
+		split=excluded.split, tech=excluded.tech, extra=excluded.extra`,
+		vdir, label.Option, d.Scale, d.Supports, d.Density, d.Format, d.Fill, d.Split, d.Tech, d.Extra)
+	return err
 }

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/codeStev/stl-library/convention"
 	"github.com/codeStev/stl-library/internal/app"
 	"github.com/codeStev/stl-library/internal/core/library"
 )
@@ -360,5 +361,70 @@ func TestMigratingAVersion1IndexKeepsItsModelsSearchable(t *testing.T) {
 	defer s.Close()
 	if hits, err := s.Search(context.Background(), app.Query{Text: "old", Limit: 5}); err != nil || len(hits) != 1 {
 		t.Errorf("after migration: %v %v", hits, err)
+	}
+}
+
+func TestImportLog(t *testing.T) {
+	s, ctx := open(t), context.Background()
+	if ok, _ := s.ImportBaselined(ctx); ok {
+		t.Error("baselined before the first run")
+	}
+	s.SetImportBaselined(ctx)
+	s.SetImportBaselined(ctx)
+	if ok, _ := s.ImportBaselined(ctx); !ok {
+		t.Error("not baselined")
+	}
+	r := app.ImportRecord{Source: "wicked/Panther", Signature: "a", State: app.ImportWaiting, Message: "wait", UpdatedUnix: 1}
+	s.SaveImport(ctx, r)
+	r.State, r.Target, r.Files, r.UpdatedUnix = app.ImportDone, "Wicked/Panther", 3, 2
+	s.SaveImport(ctx, r)
+	s.SaveImport(ctx, app.ImportRecord{Source: "nomnom/Old", State: app.ImportExisting, UpdatedUnix: 1})
+	recs, err := s.ImportRecords(ctx)
+	if err != nil || len(recs) != 2 || recs[0].Source != "wicked/Panther" || recs[0].Files != 3 || recs[0].Target != "Wicked/Panther" {
+		t.Errorf("records: %+v %v", recs, err)
+	}
+}
+
+func TestHiddenModelsAndVariantLabels(t *testing.T) {
+	s, ctx := open(t), context.Background()
+	if _, err := sync(s, libraryV1...); err != nil {
+		t.Fatal(err)
+	}
+	hits, _ := s.Search(ctx, app.Query{Text: "bell", Limit: 1})
+	bell := hits[0]
+	if err := s.SetHidden(ctx, bell.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if hits, _ := s.Search(ctx, app.Query{Text: "bell", Limit: 5}); len(hits) != 0 {
+		t.Errorf("hidden model found: %+v", hits)
+	}
+	if hits, _ := s.Search(ctx, app.Query{Text: "bell", Hidden: true, Limit: 5}); len(hits) != 1 || !hits[0].Hidden {
+		t.Errorf("with hidden: %+v", hits)
+	}
+	if _, err := sync(s, libraryV1...); err != nil { // survives a rescan
+		t.Fatal(err)
+	}
+	if hits, _ := s.Search(ctx, app.Query{Creator: "Loot Studios", Limit: 5}); len(hits) != 1 {
+		t.Errorf("after rescan: %+v", hits)
+	}
+	s.SetHidden(ctx, bell.ID, false)
+
+	m, _ := s.Model(ctx, bell.ID)
+	v := m.Variants[0] // 32mm No Supports
+	label := &app.VariantLabel{Dims: convention.Dims{Scale: "75mm", Supports: "Supported", Fill: "Hollow"}, Option: "Helmet"}
+	if err := s.SetVariantLabel(ctx, v.ID, label); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.Variant(ctx, v.ID)
+	if got.Dims != label.Dims || got.Option != "Helmet" || !got.Relabeled {
+		t.Errorf("relabeled: %+v", got)
+	}
+	s.Enqueue(ctx, v.ID, 1, "")
+	if q, _ := s.Queue(ctx); len(q) != 1 || q[0].Label != "75mm Supported Hollow Helmet" {
+		t.Errorf("queue label: %+v", q)
+	}
+	s.SetVariantLabel(ctx, v.ID, nil)
+	if got, _ := s.Variant(ctx, v.ID); got.Dims.Scale != "32mm" || got.Relabeled {
+		t.Errorf("reset: %+v", got)
 	}
 }
