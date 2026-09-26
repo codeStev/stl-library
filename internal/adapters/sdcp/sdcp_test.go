@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"errors"
 	"io"
 	"net"
 	"strconv"
@@ -196,5 +197,17 @@ func TestUploadVariants(t *testing.T) {
 	}
 	if chunks != 12 || time.Since(start) > time.Second || m.Files()["/local/v.ctb"] != len(data) {
 		t.Errorf("%d chunks in %s, stored %d", chunks, time.Since(start), m.Files()["/local/v.ctb"])
+	}
+}
+
+func TestUploadStopsEarlyWhenAsked(t *testing.T) {
+	m, p := mockPrinter(t)
+	p.UploadMaxChunks = 2
+	var chunks int
+	p.UploadTrace = func(ChunkTiming) { chunks++ }
+	data := make([]byte, 5*ChunkSize)
+	err := p.Upload(context.Background(), "early.ctb", int64(len(data)), opener(data), func(int64) {})
+	if !errors.Is(err, ErrStoppedEarly) || chunks != 2 || m.Files()["/local/early.ctb"] != 0 {
+		t.Errorf("err %v, %d chunks, stored %d", err, chunks, m.Files()["/local/early.ctb"])
 	}
 }

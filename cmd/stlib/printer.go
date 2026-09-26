@@ -26,10 +26,11 @@ Commands:
   files [dir]          list the printer's storage (default /local; "/" for volumes)
   send <file> [--print]
                        upload a sliced file (.ctb/.goo), optionally start it
-  send <file> --trace [--no-check] [--chunk-kb N]
+  send <file> --trace [--max-chunks N] [--no-check] [--chunk-kb N]
                        upload only (never prints) and show where the time
-                       goes per chunk: network vs. the printer; --no-check
-                       and --chunk-kb try non-standard variants
+                       goes per chunk: network vs. the printer. --max-chunks
+                       stops early (the printer discards the partial file);
+                       --no-check and --chunk-kb try non-standard variants
   print <name>         start a file already on the printer
   rm <name>...         delete files from the printer
   pause | resume | stop
@@ -83,7 +84,7 @@ func newPrinter(s app.PrinterSettings) app.Printer {
 }
 
 func runPrinter(ctx context.Context, host, db string, args []string, out io.Writer) error {
-	doPrint, trace, noCheck, chunkKB := false, false, false, 0
+	doPrint, trace, noCheck, chunkKB, maxChunks := false, false, false, 0, 0
 	var rest []string
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; a {
@@ -93,6 +94,16 @@ func runPrinter(ctx context.Context, host, db string, args []string, out io.Writ
 			trace = true
 		case "--no-check":
 			noCheck = true
+		case "--max-chunks":
+			if i+1 >= len(args) {
+				return errors.New("--max-chunks needs a number")
+			}
+			i++
+			n, err := strconv.Atoi(args[i])
+			if err != nil || n < 1 {
+				return errors.New("--max-chunks must be a positive number")
+			}
+			maxChunks = n
 		case "--chunk-kb":
 			if i+1 >= len(args) {
 				return errors.New("--chunk-kb needs a number")
@@ -110,8 +121,8 @@ func runPrinter(ctx context.Context, host, db string, args []string, out io.Writ
 	if trace && doPrint {
 		return errors.New("--trace only uploads; it never starts a print (leave out --print)")
 	}
-	if (noCheck || chunkKB > 0) && !trace {
-		return errors.New("--no-check and --chunk-kb are experiments; use them with --trace")
+	if (noCheck || chunkKB > 0 || maxChunks > 0) && !trace {
+		return errors.New("--no-check, --chunk-kb and --max-chunks are experiments; use them with --trace")
 	}
 	if len(rest) == 0 || rest[0] == "help" {
 		fmt.Fprintln(out, printerUsage)
@@ -182,7 +193,7 @@ func runPrinter(ctx context.Context, host, db string, args []string, out io.Writ
 		var tr *uploadTrace
 		if trace {
 			sp := p.(*sdcp.Printer)
-			sp.UploadNoCheck, sp.UploadChunk = noCheck, chunkKB<<10
+			sp.UploadNoCheck, sp.UploadChunk, sp.UploadMaxChunks = noCheck, chunkKB<<10, maxChunks
 			tr = &uploadTrace{out: out}
 			sp.UploadTrace = tr.chunk
 			fmt.Fprintf(out, "tracing the upload of %s (%s), chunk %s, Check=%v - no print is started\n",
@@ -201,6 +212,11 @@ func runPrinter(ctx context.Context, host, db string, args []string, out io.Writ
 			}
 		})
 		fmt.Fprintln(out)
+		if errors.Is(err, sdcp.ErrStoppedEarly) {
+			fmt.Fprintf(out, "stopped after %d chunks, as asked (the printer discards the incomplete file)\n", maxChunks)
+			tr.summary(time.Since(start))
+			return nil
+		}
 		if err != nil {
 			return err
 		}

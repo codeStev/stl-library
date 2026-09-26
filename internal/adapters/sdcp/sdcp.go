@@ -39,6 +39,9 @@ type Printer struct {
 	// values are what the protocol specifies.
 	UploadChunk   int  // bytes per chunk; ChunkSize when 0
 	UploadNoCheck bool // send Check=0 (no MD5 verification by the printer)
+	// UploadMaxChunks stops after that many chunks (0 = all), leaving an
+	// incomplete transfer the printer discards: for timing experiments.
+	UploadMaxChunks int
 	// UploadTrace, if set, receives the timing of every chunk. On Linux
 	// the kernel tells when the printer has acknowledged all of a chunk,
 	// so Send measures the network and Wait the printer.
@@ -56,6 +59,9 @@ var _ app.Printer = (*Printer)(nil)
 // ChunkSize of uploads, as the protocol specifies. The printer wants
 // strictly sequential chunks.
 const ChunkSize = 1 << 20
+
+// ErrStoppedEarly: the upload stopped after UploadMaxChunks, on purpose.
+var ErrStoppedEarly = errors.New("upload stopped early (--max-chunks)")
 
 // ChunkTiming is where the time of one uploaded chunk went.
 type ChunkTiming struct {
@@ -440,6 +446,9 @@ func (p *Printer) Upload(ctx context.Context, name string, size int64, open func
 		}
 		offset += int64(n)
 		progress(offset)
+		if p.UploadMaxChunks > 0 && offset >= int64(p.UploadMaxChunks)*int64(chunk) {
+			return ErrStoppedEarly
+		}
 		if n == 0 {
 			break
 		}
