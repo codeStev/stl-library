@@ -6,7 +6,7 @@ export function Queue() {
   const [items, setItems] = useState<QueueItem[] | null>(null);
   const [error, setError] = useState("");
   const reload = () => api.queue().then(setItems, (e) => setError(String(e)));
-  const act = (p: Promise<unknown>) => p.then(reload, (e) => setError(`Could not save: ${e}`));
+  const act = (p: Promise<unknown>) => p.then(reload, (e) => setError(`Could not save: ${e instanceof Error ? e.message : e}`));
   useEffect(() => {
     reload();
   }, []);

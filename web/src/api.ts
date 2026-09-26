@@ -83,12 +83,25 @@ export interface Issue {
   reason: string;
 }
 
+// A change that gets no answer within this time counts as failed, so the
+// UI can say so instead of waiting forever.
+const SAVE_TIMEOUT_MS = 15_000;
+
 async function send<T = void>(method: string, path: string, body?: unknown): Promise<T> {
-  const r = await fetch(path, {
-    method,
-    headers: body === undefined ? {} : { "Content-Type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  let r: Response;
+  try {
+    r = await fetch(path, {
+      method,
+      headers: body === undefined ? {} : { "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(SAVE_TIMEOUT_MS),
+    });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "TimeoutError") {
+      throw new Error(`no answer from the server within ${SAVE_TIMEOUT_MS / 1000} s`);
+    }
+    throw e;
+  }
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
   return (r.status === 204 ? undefined : r.json()) as Promise<T>;
 }

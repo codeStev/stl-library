@@ -66,7 +66,7 @@ export function ModelPage({ id }: { id: number }) {
     );
   };
   // act runs a change and refreshes; a failure is shown, not swallowed.
-  const act = (p: Promise<unknown>) => p.then(refresh, (e) => setActionError(`Could not save: ${e}`));
+  const act = (p: Promise<unknown>) => p.then(refresh, (e) => setActionError(`Could not save: ${e instanceof Error ? e.message : e}`));
 
   // Only dimensions in which the variants actually differ get chips.
   const dims = useMemo(() => {
