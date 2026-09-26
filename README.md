@@ -16,7 +16,7 @@ Status: in development. What exists so far: the definition of the
 convention (`convention/`), `stlib check` (reads a library, reports its
 models and every folder that doesn't follow the convention), a SQLite
 index with full-text search (`stlib scan`, `stlib search`), and the JSON
-API (`stlib serve`). The web UI and Docker image come next.
+API with an embedded web UI (`stlib serve`), packaged as a Docker image.
 
 ## Folder convention
 
@@ -125,9 +125,44 @@ API:
 There is no authentication: keep it on a private network (it listens on
 localhost by default).
 
+## Running with Docker
+
+`deploy/combined/` holds a compose file for the image CI publishes:
+
+```
+cd deploy/combined
+cp .env.example .env    # set REGISTRY_HOST, LIBRARY_PATH, …
+docker compose up -d
+```
+
+The library is mounted read-only at `/library`; the index and thumbnail
+cache live in the `data` volume. The image is a single static binary on
+distroless (about 24 MB), running as a non-root user.
+
+## CI
+
+`.github/workflows/ci.yml` vets and tests the Go code (with the race
+detector), type-checks and builds the web UI, and builds the image. Pushes
+to `main` publish `latest`, the commit SHA and `<sha>-snapshot`; a `vX.Y.Z`
+tag also publishes `vX.Y.Z`, `vX.Y`, `vX`, `<version>-release` and cuts a
+GitHub release. Publishing joins a Tailscale tailnet to reach a private
+registry and needs:
+
+| | |
+|---|---|
+| variable `REGISTRY_HOST` | the registry, e.g. `registry.example.internal:5000` |
+| secrets `REGISTRY_USERNAME`, `REGISTRY_PASSWORD` | registry login |
+| secret `REGISTRY_CA_CERT` | the registry's CA certificate (PEM), for a self-signed internal CA |
+| secrets `TS_OAUTH_CLIENT_ID`, `TS_OAUTH_CLIENT_SECRET` | Tailscale OAuth client allowed to create `tag:ci` nodes |
+
 ## Building
 
 ```
+(cd web && npm ci && npm run build)   # the UI, embedded into the binary
 go test ./...
 go build ./cmd/stlib
 ```
+
+Without the UI build, `go build` still works; the server then says the UI
+isn't included. For UI work, `npm run dev` in `web/` proxies `/api` to a
+`stlib serve` on `127.0.0.1:8080`.
