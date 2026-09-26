@@ -166,3 +166,44 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .settings select { font: inherit; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); }
 .settings .row { display: flex; gap: 10px; }
 .settings .row label { flex: 1; }
+
+/* sign-in */
+header .me { margin-left: auto; color: var(--muted); font-size: 14px; text-decoration: none; }
+.auth-loading { padding: 40px; text-align: center; color: var(--muted); }
+.auth { min-height: 100vh; display: grid; place-items: center; padding: 16px; }
+.auth-card {
+  width: 100%; max-width: 380px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  padding: 24px; display: flex; flex-direction: column; gap: 12px;
+}
+.auth-card .brand { font-weight: 700; color: var(--muted); font-size: 14px; }
+.auth-card h1 { font-size: 22px; margin: 0; }
+.auth-card form, .settings form { display: flex; flex-direction: column; gap: 12px; }
+.auth-card label, .account label { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.auth-card input, .account input {
+  font: inherit; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text);
+}
+.auth-card img { align-self: center; background: #fff; padding: 8px; border-radius: 8px; }
+.auth-card code, .account code { font-size: 13px; word-break: break-all; }
+button.primary, a.button, .auth-card button:not(.link), .account button:not(.link) {
+  font: inherit; padding: 8px 16px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel);
+  color: var(--text); cursor: pointer; text-align: center; text-decoration: none;
+}
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+button:disabled { opacity: 0.6; cursor: default; }
+a.button.google { display: block; }
+button.link { font: inherit; background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; }
+.links { display: flex; justify-content: space-between; margin: 0; font-size: 14px; }
+.notice { color: #2a8a3e; margin: 0; }
+.auth-card .error { margin: 0; }
+.recovery-codes ol { columns: 2; font-size: 15px; padding-left: 24px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; }
+.account section { border-top: 1px solid var(--line); padding: 12px 0 16px; max-width: 520px; }
+.account h3 { margin: 0 0 8px; }
+ul.plain { list-style: none; padding: 0; margin: 0 0 12px; }
+ul.plain li { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+table.roster { border-collapse: collapse; width: 100%; font-size: 14px; }
+table.roster th, table.roster td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.roster tr.disabled td { opacity: 0.6; }
+table.roster .actions button { margin: 0 12px 4px 0; }
+table.roster select { font: inherit; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; }
+@media (max-width: 700px) { table.roster thead { display: none; } table.roster td { display: block; border: none; } table.roster tr { display: block; border-bottom: 1px solid var(--line); } }

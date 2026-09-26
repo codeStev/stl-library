@@ -7,6 +7,10 @@ import { Queue } from "./Queue";
 import { Imports } from "./Imports";
 import { Printer } from "./Printer";
 import { Settings } from "./Settings";
+import { SignedIn } from "./SignIn";
+import { AccountPage } from "./Account";
+import { Accounts } from "./Accounts";
+import type { Me } from "./auth";
 import "./style.css";
 
 // Hash routes: "#/" library, "#/model/12", "#/issues".
@@ -20,7 +24,8 @@ function useRoute(): string {
   return hash;
 }
 
-function App() {
+function App({ me, signOut }: { me: Me; signOut: () => void }) {
+  const admin = me.role === "ADMIN";
   const route = useRoute();
   const model = route.match(/^#\/model\/(\d+)/);
   return (
@@ -35,8 +40,14 @@ function App() {
           <a href="#/printer">Printer</a>
           <a href="#/imports">Imports</a>
           <a href="#/issues">Not following the convention</a>
-          <a href="#/settings">Settings</a>
+          {admin && <a href="#/settings">Settings</a>}
+          {admin && <a href="#/accounts">Accounts</a>}
         </nav>
+        {me.email && (
+          <a href="#/account" className="me" title="Your account">
+            {me.email}
+          </a>
+        )}
       </header>
       <main>
         {model ? (
@@ -46,11 +57,15 @@ function App() {
         ) : route.startsWith("#/queue") ? (
           <Queue />
         ) : route.startsWith("#/imports") ? (
-          <Imports />
+          <Imports admin={admin} />
         ) : route.startsWith("#/printer") ? (
           <Printer />
-        ) : route.startsWith("#/settings") ? (
+        ) : route.startsWith("#/settings") && admin ? (
           <Settings />
+        ) : route.startsWith("#/accounts") && admin ? (
+          <Accounts me={me} />
+        ) : route.startsWith("#/account") && me.id ? (
+          <AccountPage me={me} signOut={signOut} />
         ) : (
           <Library />
         )}
@@ -61,6 +76,6 @@ function App() {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App />
+    <SignedIn>{(me, signOut) => <App me={me} signOut={signOut} />}</SignedIn>
   </StrictMode>,
 );

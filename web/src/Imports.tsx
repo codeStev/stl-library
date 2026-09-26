@@ -11,7 +11,7 @@ const TITLES: Record<ImportRecord["state"], string> = {
 };
 
 // What the importer did with each download folder.
-export function Imports() {
+export function Imports({ admin = true }: { admin?: boolean }) {
   const [data, setData] = useState<{ enabled: boolean; records: ImportRecord[] } | null>(null);
   const [error, setError] = useState("");
   const reload = () => api.imports().then(setData, (e) => setError(String(e)));
@@ -53,7 +53,7 @@ export function Imports() {
                   {r.message}
                   {r.files > 0 && ` · ${r.files} files`} · {formatDate(r.updated)}
                 </span>
-                {(state === "existing" || state === "failed") && (
+                {admin && (state === "existing" || state === "failed") && (
                   <button className="small" onClick={() => api.requestImport(r.source).then(reload, (e) => setError(String(e)))}>
                     Import
                   </button>

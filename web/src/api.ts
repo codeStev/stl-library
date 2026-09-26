@@ -1,5 +1,7 @@
 // Typed client for the stlib JSON API.
 
+import { signedOut } from "./auth";
+
 export interface ModelSummary {
   id: number;
   creator: string;
@@ -170,12 +172,14 @@ async function send<T = void>(method: string, path: string, body?: unknown): Pro
     }
     throw e;
   }
+  if (r.status === 401) signedOut();
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
   return (r.status === 204 ? undefined : r.json()) as Promise<T>;
 }
 
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(path);
+  if (r.status === 401) signedOut();
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
   return r.json() as Promise<T>;
 }
