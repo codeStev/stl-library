@@ -1,0 +1,24 @@
+# Runs the image published by CI. Copy .env.example to .env and adjust
+# before `docker compose up -d`. Requires `docker login <REGISTRY_HOST>`
+# first if the registry needs auth.
+#
+# No built-in auth or HTTPS - bound to 127.0.0.1 by default; put it behind
+# whatever network boundary you already trust (Tailscale/WireGuard, a
+# reverse proxy with its own auth, or LAN only).
+
+services:
+  stl-library:
+    image: ${REGISTRY_HOST}/stl-library:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      SCAN_INTERVAL: ${SCAN_INTERVAL:-1h}
+    ports:
+      - "${APP_BIND_HOST:-127.0.0.1}:${APP_PORT:-8080}:8080"
+    volumes:
+      # The library is only ever read.
+      - ${LIBRARY_PATH:?set LIBRARY_PATH in .env}:/library:ro
+      # Index and thumbnail cache.
+      - data:/data
+
+volumes:
+  data:

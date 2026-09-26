@@ -1,0 +1,7 @@
+.git
+web/node_modules
+internal/adapters/web/dist/assets
+internal/adapters/web/dist/index.html
+*.db
+*.db-*
+/stlib
