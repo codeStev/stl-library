@@ -187,18 +187,23 @@ point the settings at it (or `--host 127.0.0.1:13030` with
 
 On the Settings page (admins): an [ntfy](https://ntfy.sh) topic URL (with
 an optional access token) and/or an SMTP server, and which events to send -
-print finished / stopped / error, import done / needs attention. "Send
+print finished / stopped / error, import done / needs attention, someone
+created an account. "Send
 test" tries the entered values before saving. Tokens and passwords are
 stored encrypted with the app secret (see below) and never sent back to the
 browser.
 
 ### Accounts and sign-in
 
-Everything but the sign-in pages needs an account. Anyone who can reach the
-app can register; **the first account becomes the admin** - so register
-yours right after the first start. Accounts share the library, the print
-queue and the printer; admins also manage settings, on-request imports and
-the accounts (roles, disable, reset a second factor, set a password).
+Everything but the sign-in pages needs an account. **The first account
+becomes the admin** - so register yours right after the first start. After
+that, anyone who can reach the app can register, unless
+`OPEN_REGISTRATION=false`: then only admins add accounts (on the Accounts
+page, with an initial password or as a Google address). Accounts share the
+library, the print queue and the printer; admins also manage settings,
+on-request imports and the accounts (add, roles, disable, reset a second
+factor, set a password). The "Someone created an account" notification
+tells admins about self-registrations.
 
 - Passwords: at least 12 characters, bcrypt-hashed. Repeated failures lock
   the account for 15 minutes; sign-in, registration and recovery are rate
@@ -218,7 +223,9 @@ the accounts (roles, disable, reset a second factor, set a password).
   `GOOGLE_CLIENT_SECRET` (an OAuth client of type "Web application" with the
   redirect URI `<PUBLIC_URL>/login/oauth2/code/google`). A Google account
   never takes over an existing password account with the same email, and it
-  still needs the second factor.
+  still needs the second factor. With registration closed, only Google
+  addresses an admin added can sign in; the first sign-in binds the Google
+  account to it.
 - `APP_SECRET` (at least 32 characters) signs sessions and encrypts stored
   secrets. Without it, one is generated into `DATA_DIR/secret.key` - keep
   that file with the data (losing it signs everyone out and makes stored
@@ -243,6 +250,7 @@ LIBRARY_ROOT=/path/to/library DATA_DIR=./data stlib serve
 | `IMPORT_SETTLE` | `1h` | how long a download folder must be unchanged to count as complete |
 | `APP_SECRET` | (generated) | at least 32 characters; else `DATA_DIR/secret.key` is created |
 | `PUBLIC_URL` | (off) | the address users open the app at; turns on passkeys (and Google) |
+| `OPEN_REGISTRATION` | `true` | `false`: after the first account, only admins add accounts |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | (off) | Google sign-in, with `PUBLIC_URL` |
 | `TRUST_PROXY_HEADERS` | `false` | `true` behind a reverse proxy: client address from `X-Forwarded-For` (rate limits, device list) |
 

@@ -20,6 +20,7 @@ services:
       PRINTER_ADDR: ${PRINTER_ADDR:-}
       # Sign-in (see .env.example).
       PUBLIC_URL: ${PUBLIC_URL:-}
+      OPEN_REGISTRATION: ${OPEN_REGISTRATION:-true}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       APP_SECRET: ${APP_SECRET:-}
