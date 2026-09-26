@@ -92,6 +92,8 @@ export function ModelPage({ id }: { id: number }) {
                 </div>
               )}
             </>
+          ) : m.preview ? (
+            <img className="main render" src={api.previewURL(m.id)} alt={`${m.name} (rendered)`} />
           ) : (
             <div className="noimage">no image</div>
           )}

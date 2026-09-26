@@ -30,7 +30,8 @@ func server(t *testing.T) *httptest.Server {
 		"Loot Studios/Abyssal Haze/Enemies/Bell Head/32mm/Supported Lychee/bell.lys": "LYS",
 		"Loot Studios/Abyssal Haze/Enemies/Bell Head/32mm/Supported Lychee/base.lys": "BASE",
 		"Loot Studios/Abyssal Haze/Enemies/Bell Head/32mm/No Supports/bell.stl":      "STL",
-		"Loot Studios/Abyssal Haze/Enemies/Bell Head/cover.jpg":                      "JPG",
+		"Loot Studios/Abyssal Haze/Enemies/Bell Head/cover.jpg":                      tinyJPEG(),
+		"Loot Studios/Abyssal Haze/Enemies/Bell Head/zz-broken.jpg":                  "not a JPEG",
 		"Loot Studios/Abyssal Haze/Enemies/Bell Head/render.png":                     tinyPNG(),
 		"Artisan Guild/Noble Alfar/Kövön the Wise/k.stl":                             "K",
 		"Lord of the Print/Unchained/Araki/Presupported/a.stl":                       "A",
@@ -85,7 +86,7 @@ func TestSearchThenModelDetail(t *testing.T) {
 	}
 	var m modelDetail
 	getJSON(t, srv, "/api/models/"+itoa(hits[0].ID), &m)
-	if len(m.Variants) != 2 || len(m.Images) != 2 || m.Images[0].Name != "cover.jpg" {
+	if len(m.Variants) != 2 || len(m.Images) != 3 || m.Images[0].Name != "cover.jpg" {
 		t.Fatalf("detail: %+v", m)
 	}
 	v := m.Variants[1]
@@ -137,7 +138,7 @@ func TestVariantZipAndFiles(t *testing.T) {
 	}
 
 	resp, body = get(t, srv, "/api/images/"+itoa(m.Images[0].ID))
-	if resp.StatusCode != 200 || string(body) != "JPG" || resp.Header.Get("Content-Type") != "image/jpeg" {
+	if resp.StatusCode != 200 || string(body) != tinyJPEG() || resp.Header.Get("Content-Type") != "image/jpeg" {
 		t.Errorf("image: %d %q %v", resp.StatusCode, body, resp.Header.Get("Content-Type"))
 	}
 	resp, body = get(t, srv, "/api/parts/"+itoa(lychee.Parts[0].ID))
@@ -171,6 +172,12 @@ func TestAttachmentHeaderSurvivesNonASCII(t *testing.T) {
 	}
 }
 
+func tinyJPEG() string {
+	var b bytes.Buffer
+	jpeg.Encode(&b, image.NewNRGBA(image.Rect(0, 0, 20, 20)), nil)
+	return b.String()
+}
+
 func tinyPNG() string {
 	var b bytes.Buffer
 	png.Encode(&b, image.NewNRGBA(image.Rect(0, 0, 900, 300)))
@@ -191,8 +198,21 @@ func TestImageThumbnail(t *testing.T) {
 	if err != nil || img.Bounds().Dx() != 400 || img.Bounds().Dy() != 133 {
 		t.Errorf("thumb image: %v %v", err, img.Bounds())
 	}
-	if resp, _ := get(t, srv, "/api/images/"+itoa(m.Images[0].ID)+"/thumb"); resp.StatusCode != 500 {
+	if resp, _ := get(t, srv, "/api/images/"+itoa(m.Images[2].ID)+"/thumb"); resp.StatusCode != 500 {
 		t.Errorf("thumb of a broken image: %d", resp.StatusCode)
+	}
+	// Models without an image: the Artisan model's k.stl is one byte of
+	// text, so rendering fails; the model with only a .lys has no preview.
+	var all []modelSummary
+	getJSON(t, srv, "/api/models?creator=Artisan+Guild", &all)
+	if len(all) != 1 || !all[0].Preview || all[0].Cover != 0 {
+		t.Fatalf("artisan: %+v", all)
+	}
+	if resp, _ := get(t, srv, "/api/models/"+itoa(all[0].ID)+"/thumb"); resp.StatusCode != 500 {
+		t.Errorf("render of a broken STL: %d", resp.StatusCode)
+	}
+	if resp, _ := get(t, srv, "/api/models/"+itoa(hits[0].ID)+"/thumb"); resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "image/jpeg" {
+		t.Errorf("model with cover: %d %s", resp.StatusCode, resp.Header.Get("Content-Type"))
 	}
 }
 

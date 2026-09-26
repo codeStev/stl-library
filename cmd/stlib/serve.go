@@ -84,6 +84,11 @@ func scanLoop(ctx context.Context, l app.Lister, s app.Store, thumbs *app.Thumbs
 			if made+failed > 0 {
 				slog.Info("cover thumbnails", "made", made, "failed", failed, "took", time.Since(start).Round(time.Second))
 			}
+			start = time.Now()
+			made, failed = thumbs.WarmRenders(ctx)
+			if made+failed > 0 {
+				slog.Info("model renders", "made", made, "failed", failed, "took", time.Since(start).Round(time.Second))
+			}
 		}
 		select {
 		case <-ctx.Done():

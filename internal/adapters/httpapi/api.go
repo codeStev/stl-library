@@ -30,6 +30,7 @@ func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/models", a.searchModels)
 	mux.HandleFunc("GET /api/models/{id}", a.model)
+	mux.HandleFunc("GET /api/models/{id}/thumb", a.modelThumb)
 	mux.HandleFunc("GET /api/creators", a.creators)
 	mux.HandleFunc("GET /api/issues", a.issues)
 	mux.HandleFunc("GET /api/variants/{id}/zip", a.variantZip)
@@ -50,6 +51,9 @@ type modelSummary struct {
 	Parts    int    `json:"parts"`
 	Bytes    int64  `json:"bytes"`
 	Cover    int64  `json:"cover,omitempty"` // image id
+	// Preview: /api/models/{id}/thumb has something to show (an image or
+	// a rendered STL).
+	Preview bool `json:"preview"`
 }
 
 type fileRef struct {
@@ -73,7 +77,7 @@ type modelDetail struct {
 }
 
 func summary(m app.ModelSummary) modelSummary {
-	return modelSummary{m.ID, m.Creator, m.Release, m.Category, m.Name, m.Dir, m.Variants, m.Parts, m.Bytes, m.Cover}
+	return modelSummary{m.ID, m.Creator, m.Release, m.Category, m.Name, m.Dir, m.Variants, m.Parts, m.Bytes, m.Cover, m.Cover != 0 || m.Renderable}
 }
 
 func refs(fs []app.FileRef) []fileRef {
@@ -211,6 +215,21 @@ func (a *API) thumb(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Cache-Control", "private, max-age=86400")
+	w.Write(data)
+}
+
+func (a *API) modelThumb(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	data, ct, err := a.Thumbs.Model(r.Context(), id)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", ct)
 	w.Header().Set("Cache-Control", "private, max-age=86400")
 	w.Write(data)
 }

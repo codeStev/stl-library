@@ -11,6 +11,7 @@ export interface ModelSummary {
   parts: number;
   bytes: number;
   cover?: number;
+  preview: boolean;
 }
 
 export interface FileRef {
@@ -62,6 +63,7 @@ export const api = {
   issues: () => get<Issue[]>("/api/issues"),
   imageURL: (id: number) => `/api/images/${id}`,
   thumbURL: (id: number) => `/api/images/${id}/thumb`,
+  previewURL: (modelId: number) => `/api/models/${modelId}/thumb`,
   partURL: (id: number) => `/api/parts/${id}`,
   zipURL: (variantId: number) => `/api/variants/${variantId}/zip`,
 };
