@@ -211,3 +211,45 @@ func TestHiddenTemporaryFilesAndChangeTimesKeepAFolderWaiting(t *testing.T) {
 		t.Errorf("hidden file placed: %+v", ps)
 	}
 }
+
+func TestBustsBelongToTheirModelAsTheBustScale(t *testing.T) {
+	var units []Unit
+	for _, u := range Units([]File{
+		{Rel: "nomnom/Busts/Kida - Atlantis/STL/k.stl"}, {Rel: "nomnom/Busts/Lune/STL/l.stl"},
+		{Rel: "nomnom/July 2025 Release/Busts/Suki/Supported STL/s.stl"},
+		{Rel: "nomnom/July 2025 Release/Suki/75mm/Supported STL/s.stl"},
+		{Rel: "nomnom/July 2025 Release/Mewtwo/75mm/STL/m.stl"},
+	}) {
+		units = append(units, u)
+	}
+	got := map[string]bool{}
+	for _, u := range units {
+		got[u.Path] = u.Bust
+	}
+	want := map[string]bool{"nomnom/Busts/Kida - Atlantis": true, "nomnom/Busts/Lune": true,
+		"nomnom/July 2025 Release/Busts/Suki": true, "nomnom/July 2025 Release/Suki": false, "nomnom/July 2025 Release/Mewtwo": false}
+	if len(got) != len(want) {
+		t.Fatalf("units %v", got)
+	}
+	for p, b := range want {
+		if v, ok := got[p]; !ok || v != b {
+			t.Errorf("%s: bust=%v present=%v", p, v, ok)
+		}
+	}
+	// A bust unit's print files get the Bust scale; its renders belong to the whole model.
+	u := Unit{Creator: "nomnom", Path: "nomnom/Busts/Kida - Atlantis", Name: "Kida - Atlantis", Bust: true}
+	var targets []string
+	for _, p := range Placements(u, []File{{Rel: "STL/k.stl"}, {Rel: "Supported Lychee/k.lys"}, {Rel: "Render Images/r.jpg"}}, "nomnom") {
+		targets = append(targets, p.Target)
+	}
+	sort.Strings(targets)
+	if strings.Join(targets, "\n") != "nomnom/Kida - Atlantis/Bust/No Supports/k.stl\nnomnom/Kida - Atlantis/Bust/Supported Lychee/k.lys\nnomnom/Kida - Atlantis/Render Images/r.jpg" {
+		t.Errorf("targets:\n%s", strings.Join(targets, "\n"))
+	}
+	// Inside a download, a Busts folder is the Bust scale too.
+	full := Unit{Creator: "nomnom", Path: "nomnom/Kida", Name: "Kida - Atlantis"}
+	p := Placements(full, []File{{Rel: "STL/Busts/Supported/b.stl"}, {Rel: "STL/75mm/Supported/k.stl"}}, "nomnom")
+	if p[0].Target != "nomnom/Kida - Atlantis/Bust/Supported/b.stl" {
+		t.Errorf("Busts subfolder: %s", p[0].Target)
+	}
+}

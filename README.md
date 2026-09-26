@@ -105,6 +105,10 @@ With `IMPORT_SOURCE` set, `stlib serve` looks at that folder every
   file names (`…_pre_supported_lys.zip`, `(Chitubox Pre Supported)`,
   `Presupports/1-10 Scale_Split`), zips are unpacked, images and documents
   go next to the model. A wrong guess can be fixed in the UI (fix label).
+- **Busts:** a bust shipped separately in a `Busts` folder (`<creator>/Busts/<model>`,
+  or inside a release folder) is imported as the `Bust` scale of the model
+  of that name, into the existing model folder; its render images go to the
+  model. A `Busts` folder inside a download is the `Bust` scale too.
 - **The library only gets new files** (written under a hidden temporary
   name, then renamed). A file of the same name with other content is kept,
   the new one is added as "… (imported)".

@@ -298,3 +298,17 @@ func TestImporterComparesContentNotJustSize(t *testing.T) {
 		t.Errorf("identical: %+v %v %s", sum, err, lib.list())
 	}
 }
+
+func TestImporterPutsABustIntoItsExistingModel(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	dl := &fakeDownloads{files: []importer.File{{Rel: "nomnom/Busts/Kida - Atlantis/Supported STL/b.stl", Size: 1, ModUnix: 1}}}
+	lib := &fakeLibrary{files: map[string]int64{"Nomnom/Kida - Atlantis/75mm/Supported/k.stl": 1}}
+	log := &memLog{recs: map[string]ImportRecord{}, baselined: true}
+	im := &Importer{Downloads: dl, Library: lib, Log: log, Settle: time.Hour, Now: func() time.Time { return now }}
+	if sum, err := im.Run(context.Background()); err != nil || sum.Imported != 1 {
+		t.Fatalf("%+v %v", sum, err)
+	}
+	if !strings.Contains(lib.list(), "Nomnom/Kida - Atlantis/Bust/Supported/b.stl") || strings.Contains(lib.list(), "(2)") {
+		t.Errorf("library:\n%s", lib.list())
+	}
+}

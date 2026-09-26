@@ -244,7 +244,7 @@ func (im *Importer) importUnit(ctx context.Context, u importer.Unit, rec *Import
 		return 0, nil
 	}
 	modelDir := modelDirOf(placements[0].Target)
-	target, err := im.targetDir(ctx, modelDir, rec.Target)
+	target, err := im.targetDir(ctx, modelDir, rec.Target, u.Bust)
 	if err != nil {
 		return 0, err
 	}
@@ -366,10 +366,14 @@ func (im *Importer) creatorDir(ctx context.Context, creator string) (string, err
 }
 
 // targetDir is the model folder to import into: the one used before for
-// this download, or a fresh one - "<Model> (2)" if the name is taken.
-func (im *Importer) targetDir(ctx context.Context, modelDir, previous string) (string, error) {
+// this download, or a fresh one - "<Model> (2)" if the name is taken. A
+// bust goes into the model of its name (it is that model's Bust scale).
+func (im *Importer) targetDir(ctx context.Context, modelDir, previous string, bust bool) (string, error) {
 	if previous != "" {
 		return previous, nil
+	}
+	if bust {
+		return modelDir, nil
 	}
 	for i := 1; ; i++ {
 		dir := modelDir

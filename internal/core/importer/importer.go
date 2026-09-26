@@ -41,6 +41,10 @@ type Unit struct {
 	Path    string // below the downloads root
 	Name    string // the model folder's name
 	Files   []File // plain files only (archives not expanded)
+	// Bust: the unit is a model's bust, shipped separately in a Busts
+	// folder (<creator>/Busts/<model>, <creator>/<container>/Busts/<model>).
+	// It belongs to the model of that name as its Bust scale.
+	Bust bool
 }
 
 // temporary download files: a unit containing one is still being written.
@@ -107,8 +111,24 @@ func Units(files []File) []Unit {
 	var units []Unit
 	for key, fs := range byTop {
 		creator, name := splitFirst(key)
+		if isBustsFolder(name) {
+			if busts := bustChildren(fs); busts != nil {
+				for child, cfs := range busts {
+					units = append(units, Unit{Creator: creator, Path: key + "/" + child, Name: child, Files: cfs, Bust: true})
+				}
+				continue
+			}
+		}
 		if children := containerChildren(fs); children != nil {
 			for child, cfs := range children {
+				if isBustsFolder(child) {
+					if busts := bustChildren(cfs); busts != nil {
+						for m, mfs := range busts {
+							units = append(units, Unit{Creator: creator, Path: key + "/" + child + "/" + m, Name: m, Files: mfs, Bust: true})
+						}
+						continue
+					}
+				}
 				units = append(units, Unit{Creator: creator, Path: key + "/" + child, Name: child, Files: cfs})
 			}
 			continue
@@ -140,6 +160,28 @@ func containerChildren(fs []File) map[string][]File {
 		return nil
 	}
 	return children
+}
+
+// isBustsFolder: a folder of busts ("Busts", "Bust").
+func isBustsFolder(name string) bool {
+	ws := words(name)
+	return len(ws) == 1 && (ws[0] == "busts" || ws[0] == "bust")
+}
+
+// bustChildren splits a Busts folder into its models (one folder each);
+// nil if it has loose files (then it is a bust model itself).
+func bustChildren(fs []File) map[string][]File {
+	out := map[string][]File{}
+	for _, f := range fs {
+		child, rest := splitFirst(f.Rel)
+		if rest == "" {
+			return nil
+		}
+		g := f
+		g.Rel = rest
+		out[child] = append(out[child], g)
+	}
+	return out
 }
 
 func splitFirst(p string) (string, string) {
@@ -199,6 +241,9 @@ func Placements(u Unit, files []File, creatorDir string) []Placement {
 			}
 		}
 		if it.print {
+			if u.Bust {
+				it.dims.Scale = "Bust" // a separately shipped bust: the model's Bust scale
+			}
 			if fmt := convention.FormatOfExtension(ext(name)); fmt != "" && fmt != "STL" {
 				it.dims.Format = fmt
 			}
@@ -303,6 +348,7 @@ var phrases = []struct {
 	{[]string{"hollowed"}, func(d *convention.Dims) { d.Fill = "Hollow" }},
 	{[]string{"solid"}, func(d *convention.Dims) { d.Fill = "Solid" }},
 	{[]string{"bust"}, func(d *convention.Dims) { d.Scale = "Bust" }},
+	{[]string{"busts"}, func(d *convention.Dims) { d.Scale = "Bust" }},
 	{[]string{"lys"}, func(d *convention.Dims) {}}, // format comes from the file extension
 	{[]string{"lychee"}, func(d *convention.Dims) {}},
 	{[]string{"chitubox"}, func(d *convention.Dims) {}},
