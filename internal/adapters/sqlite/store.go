@@ -5,6 +5,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -793,5 +794,34 @@ func (s *Store) SetVariantLabel(ctx context.Context, variantID int64, label *app
 		supports=excluded.supports, density=excluded.density, format=excluded.format, fill=excluded.fill,
 		split=excluded.split, tech=excluded.tech, extra=excluded.extra`,
 		vdir, label.Option, d.Scale, d.Supports, d.Density, d.Format, d.Fill, d.Split, d.Tech, d.Extra)
+	return err
+}
+
+var _ app.Settings = (*Store)(nil)
+
+// PrinterSettings returns the saved printer settings.
+func (s *Store) PrinterSettings(ctx context.Context) (app.PrinterSettings, bool, error) {
+	var v string
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = 'printer'`).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return app.PrinterSettings{}, false, nil
+	}
+	if err != nil {
+		return app.PrinterSettings{}, false, err
+	}
+	var ps app.PrinterSettings
+	if err := json.Unmarshal([]byte(v), &ps); err != nil {
+		return app.PrinterSettings{}, false, fmt.Errorf("saved printer settings: %w", err)
+	}
+	return ps, true, nil
+}
+
+// SavePrinterSettings saves the printer settings.
+func (s *Store) SavePrinterSettings(ctx context.Context, ps app.PrinterSettings) error {
+	b, err := json.Marshal(ps)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO meta (key, value) VALUES ('printer', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, string(b))
 	return err
 }

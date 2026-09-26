@@ -428,3 +428,16 @@ func TestHiddenModelsAndVariantLabels(t *testing.T) {
 		t.Errorf("reset: %+v", got)
 	}
 }
+
+func TestPrinterSettings(t *testing.T) {
+	s, ctx := open(t), context.Background()
+	if _, ok, err := s.PrinterSettings(ctx); ok || err != nil {
+		t.Errorf("before saving: %v %v", ok, err)
+	}
+	want := app.PrinterSettings{Host: "192.168.2.40", ControlPort: 3030}
+	s.SavePrinterSettings(ctx, want)
+	s.SavePrinterSettings(ctx, want)
+	if got, ok, err := s.PrinterSettings(ctx); !ok || err != nil || got != want {
+		t.Errorf("got %+v %v %v", got, ok, err)
+	}
+}

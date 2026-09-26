@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,22 +47,111 @@ type Transfer struct {
 	Started time.Time
 }
 
+// PrinterSettings say how to reach the printer.
+type PrinterSettings struct {
+	Host          string // IP or host name; empty = no printer
+	ControlPort   int    // 0 = the protocol's default
+	DiscoveryPort int
+}
+
+// Settings stores what the user configured in the app.
+type Settings interface {
+	// PrinterSettings returns the saved printer settings; ok is false when
+	// none were saved.
+	PrinterSettings(ctx context.Context) (s PrinterSettings, ok bool, err error)
+	SavePrinterSettings(ctx context.Context, s PrinterSettings) error
+}
+
+// ErrNoPrinter is returned when no printer is configured.
+var ErrNoPrinter = errors.New("no printer configured")
+
 // Printing sends library files to the printer and relays its controls.
 // One transfer at a time; it runs in the background, since uploads over
-// WiFi are slow (a large file takes many minutes).
+// WiFi are slow (a large file takes many minutes). The printer comes from
+// the saved settings (or Default when none are saved), so changing them
+// takes effect right away.
 type Printing struct {
-	Printer Printer
-	Store   Store
-	Files   Files
+	Store    Store
+	Files    Files
+	Settings Settings
+	Default  PrinterSettings // e.g. from the environment
+	Connect  func(PrinterSettings) Printer
 
 	mu       sync.Mutex
 	transfer *Transfer
 	cancel   context.CancelFunc
+	current  Printer
+	currentS PrinterSettings
+}
+
+// Config returns the settings in effect and where they come from
+// ("saved", "default" or "none").
+func (p *Printing) Config(ctx context.Context) (PrinterSettings, string, error) {
+	if p.Settings != nil {
+		s, ok, err := p.Settings.PrinterSettings(ctx)
+		if err != nil {
+			return PrinterSettings{}, "", err
+		}
+		if ok {
+			return s, "saved", nil
+		}
+	}
+	if p.Default.Host != "" {
+		return p.Default, "default", nil
+	}
+	return PrinterSettings{}, "none", nil
+}
+
+// printer returns the printer for the settings in effect.
+func (p *Printing) printer(ctx context.Context) (Printer, error) {
+	s, _, err := p.Config(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if s.Host == "" {
+		return nil, ErrNoPrinter
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.current == nil || p.currentS != s {
+		p.current, p.currentS = p.Connect(s), s
+	}
+	return p.current, nil
+}
+
+// SaveConfig validates and saves printer settings (an empty host turns
+// the printer features off).
+func (p *Printing) SaveConfig(ctx context.Context, s PrinterSettings) error {
+	s.Host = strings.TrimSpace(s.Host)
+	if !validPrinterSettings(s) {
+		return ErrInvalid
+	}
+	return p.Settings.SavePrinterSettings(ctx, s)
+}
+
+// TestConfig asks a printer for its status with the given settings,
+// without saving them.
+func (p *Printing) TestConfig(ctx context.Context, s PrinterSettings) (printer.Status, error) {
+	s.Host = strings.TrimSpace(s.Host)
+	if s.Host == "" || !validPrinterSettings(s) {
+		return printer.Status{}, ErrInvalid
+	}
+	return p.Connect(s).Status(ctx)
+}
+
+func validPrinterSettings(s PrinterSettings) bool {
+	okPort := func(n int) bool { return n >= 0 && n <= 65535 }
+	return okPort(s.ControlPort) && okPort(s.DiscoveryPort) && len(s.Host) <= 253 &&
+		!strings.ContainsAny(s.Host, " /\\?#@")
 }
 
 // Status is the printer's state and the current or last transfer.
 func (p *Printing) Status(ctx context.Context) (printer.Status, *Transfer, error) {
-	st, err := p.Printer.Status(ctx)
+	pr, err := p.printer(ctx)
+	if err != nil {
+		return printer.Status{}, nil, err
+	}
+	st, err := pr.Status(ctx)
 	p.mu.Lock()
 	var t *Transfer
 	if p.transfer != nil {
@@ -84,7 +174,11 @@ func (p *Printing) Send(ctx context.Context, partID int64, start bool) (*Transfe
 	if !printer.Printable(name) {
 		return nil, fmt.Errorf("%w: %s is not a sliced printer file (.ctb or .goo)", ErrInvalid, name)
 	}
-	st, err := p.Printer.Status(ctx)
+	pr, err := p.printer(ctx)
+	if err != nil {
+		return nil, err
+	}
+	st, err := pr.Status(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -100,20 +194,20 @@ func (p *Printing) Send(ctx context.Context, partID int64, start bool) (*Transfe
 	p.transfer = t
 	bg, cancel := context.WithCancel(context.Background())
 	p.cancel = cancel
-	go p.run(bg, *part, t)
+	go p.run(bg, pr, *part, t)
 	c := *t
 	return &c, nil
 }
 
-func (p *Printing) run(ctx context.Context, part FileRef, t *Transfer) {
+func (p *Printing) run(ctx context.Context, pr Printer, part FileRef, t *Transfer) {
 	open := func() (io.ReadCloser, error) { return p.Files.Open(ctx, part.Path) }
-	err := p.Printer.Upload(ctx, t.File, part.Size, open, func(sent int64) {
+	err := pr.Upload(ctx, t.File, part.Size, open, func(sent int64) {
 		p.mu.Lock()
 		t.Sent = sent
 		p.mu.Unlock()
 	})
 	if err == nil && t.Start {
-		err = p.Printer.Start(ctx, t.File)
+		err = pr.Start(ctx, t.File)
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -142,13 +236,50 @@ func (p *Printing) CancelTransfer() error {
 
 // Control pauses, resumes or stops the current print.
 func (p *Printing) Control(ctx context.Context, action string) error {
+	pr, err := p.printer(ctx)
+	if err != nil {
+		return err
+	}
 	switch action {
 	case "pause":
-		return p.Printer.Pause(ctx)
+		return pr.Pause(ctx)
 	case "resume":
-		return p.Printer.Resume(ctx)
+		return pr.Resume(ctx)
 	case "stop":
-		return p.Printer.Stop(ctx)
+		return pr.Stop(ctx)
 	}
 	return ErrInvalid
+}
+
+// PrinterFiles lists a folder of the printer's storage.
+func (p *Printing) PrinterFiles(ctx context.Context, dir string) ([]printer.File, error) {
+	pr, err := p.printer(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return pr.Files(ctx, dir)
+}
+
+// PrintExisting starts a file that is already on the printer.
+func (p *Printing) PrintExisting(ctx context.Context, name string) error {
+	if !printer.Printable(name) {
+		return fmt.Errorf("%w: %s is not a sliced printer file (.ctb or .goo)", ErrInvalid, name)
+	}
+	pr, err := p.printer(ctx)
+	if err != nil {
+		return err
+	}
+	return pr.Start(ctx, name)
+}
+
+// DeletePrinterFiles removes files from the printer's storage.
+func (p *Printing) DeletePrinterFiles(ctx context.Context, names []string) error {
+	if len(names) == 0 {
+		return ErrInvalid
+	}
+	pr, err := p.printer(ctx)
+	if err != nil {
+		return err
+	}
+	return pr.Delete(ctx, names)
 }

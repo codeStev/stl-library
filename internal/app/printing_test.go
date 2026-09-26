@@ -100,7 +100,7 @@ func wait(t *testing.T, p *Printing, state string) *Transfer {
 
 func TestSendUploadsAndStartsInTheBackground(t *testing.T) {
 	fp := &fakePrinter{machine: printer.Idle, uploaded: map[string]string{}}
-	p := &Printing{Printer: fp, Store: partStore{}, Files: oneFile{}}
+	p := withPrinter(fp)
 	ctx := context.Background()
 	if _, err := p.Send(ctx, 1, true); err != nil {
 		t.Fatal(err)
@@ -121,7 +121,7 @@ func TestSendUploadsAndStartsInTheBackground(t *testing.T) {
 
 func TestSendRefusesWhatCantBeSent(t *testing.T) {
 	fp := &fakePrinter{machine: printer.Idle, uploaded: map[string]string{}, block: make(chan struct{})}
-	p := &Printing{Printer: fp, Store: partStore{}, Files: oneFile{}}
+	p := withPrinter(fp)
 	ctx := context.Background()
 	if _, err := p.Send(ctx, 2, false); !errors.Is(err, ErrInvalid) {
 		t.Errorf("project file: %v", err)
@@ -147,7 +147,7 @@ func TestSendRefusesWhatCantBeSent(t *testing.T) {
 
 func TestControl(t *testing.T) {
 	fp := &fakePrinter{}
-	p := &Printing{Printer: fp}
+	p := withPrinter(fp)
 	for _, a := range []string{"pause", "resume", "stop"} {
 		if err := p.Control(context.Background(), a); err != nil {
 			t.Fatal(err)
@@ -158,5 +158,60 @@ func TestControl(t *testing.T) {
 	}
 	if err := p.Control(context.Background(), "explode"); !errors.Is(err, ErrInvalid) {
 		t.Errorf("unknown action: %v", err)
+	}
+}
+
+func withPrinter(fp *fakePrinter) *Printing {
+	return &Printing{Store: partStore{}, Files: oneFile{}, Default: PrinterSettings{Host: "printer.test"},
+		Connect: func(PrinterSettings) Printer { return fp }}
+}
+
+type memSettings struct {
+	s  PrinterSettings
+	ok bool
+}
+
+func (m *memSettings) PrinterSettings(context.Context) (PrinterSettings, bool, error) {
+	return m.s, m.ok, nil
+}
+func (m *memSettings) SavePrinterSettings(_ context.Context, s PrinterSettings) error {
+	m.s, m.ok = s, true
+	return nil
+}
+
+func TestPrinterSettingsSavedOverDefaultAndSwitchOver(t *testing.T) {
+	var connected []string
+	settings := &memSettings{}
+	p := &Printing{Settings: settings, Default: PrinterSettings{Host: "from-env"},
+		Connect: func(s PrinterSettings) Printer {
+			connected = append(connected, s.Host)
+			return &fakePrinter{machine: printer.Idle}
+		}}
+	ctx := context.Background()
+	if s, src, _ := p.Config(ctx); s.Host != "from-env" || src != "default" {
+		t.Errorf("default: %+v %s", s, src)
+	}
+	p.Status(ctx)
+	p.Status(ctx) // same settings: same connection
+	if err := p.SaveConfig(ctx, PrinterSettings{Host: " 192.168.2.40 ", ControlPort: 3030}); err != nil {
+		t.Fatal(err)
+	}
+	p.Status(ctx)
+	if strings.Join(connected, ",") != "from-env,192.168.2.40" {
+		t.Errorf("connections: %v", connected)
+	}
+	if err := p.SaveConfig(ctx, PrinterSettings{Host: "a b"}); !errors.Is(err, ErrInvalid) {
+		t.Errorf("bad host: %v", err)
+	}
+	if err := p.SaveConfig(ctx, PrinterSettings{Host: "x", ControlPort: 70000}); !errors.Is(err, ErrInvalid) {
+		t.Errorf("bad port: %v", err)
+	}
+	// Saving an empty host turns the printer off, even with a default.
+	p.SaveConfig(ctx, PrinterSettings{})
+	if _, _, err := p.Status(ctx); !errors.Is(err, ErrNoPrinter) {
+		t.Errorf("turned off: %v", err)
+	}
+	if st, err := p.TestConfig(ctx, PrinterSettings{Host: "other"}); err != nil || st.Machine != printer.Idle {
+		t.Errorf("test: %+v %v", st, err)
 	}
 }
