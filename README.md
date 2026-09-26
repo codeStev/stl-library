@@ -12,11 +12,20 @@ memory, and low CPU/I/O priority for anything that touches the disk.
 library to follow the folder convention below, reads conforming folders
 exactly, and lists folders that don't conform so you can fix them yourself.
 
-Status: in development. What exists so far: the definition of the
-convention (`convention/`), `stlib check` (reads a library, reports its
-models and every folder that doesn't follow the convention), a SQLite
-index with full-text search (`stlib scan`, `stlib search`), and the JSON
-API with an embedded web UI (`stlib serve`), packaged as a Docker image.
+Features:
+
+- Library grid with search (name, creator, release, category, tags) and
+  filters (creator, tag, printed / never printed).
+- Model page: pick a variant by its dimensions (`75mm · Supported ·
+  Hollow`), images, parts, **download the variant as a zip**, a **3D view**
+  of any STL/OBJ/3MF part.
+- Previews: thumbnails of bundled images; models without an image get a
+  **rendered preview of their STL** (made in the background, cached).
+- Your own data on top: **tags**, a **display name** (the folder stays as it
+  is), **print history** per variant and a **print queue**. Kept by folder,
+  so it survives rescans.
+- "Not following the convention": the folders the app can't read, and why.
+- `stlib check` / `stlib scan` / `stlib search` on the command line.
 
 ## Folder convention
 
@@ -69,9 +78,9 @@ Hexagonal. The dependency rule is enforced by `internal/architecture_test.go`:
 | Layer | Packages | May depend on |
 |---|---|---|
 | convention (public, pure) | `convention` | standard library only, no I/O |
-| domain (pure) | `internal/core/library` - reads a file listing into models, variants, parts and issues | convention |
-| use cases + ports | `internal/app` (`Check`, `Scan`, `Search`, `VariantZip`; ports `Lister`, `Store`, `Files`) | core |
-| adapters | `internal/adapters/disk` (read-only listing and file access), `internal/adapters/sqlite` (index, FTS5), `internal/adapters/httpapi` (JSON API, driving) | app, core |
+| domain (pure) | `internal/core/library` (reads a file listing into models, variants, parts and issues), `internal/core/thumb` (image thumbnails), `internal/core/render` (streaming STL rasterizer) | convention |
+| use cases + ports | `internal/app` (`Check`, `Scan`, `Search`, `VariantZip`, `Thumbs`, `UserData`; ports `Lister`, `Store`, `Files`, `ThumbCache`) | core |
+| adapters | `internal/adapters/disk` (read-only listing and file access, thumbnail cache), `internal/adapters/sqlite` (index, FTS5, user data), `internal/adapters/httpapi` (JSON API, driving), `internal/adapters/web` (embedded UI) | app, core |
 | driving adapter | `cmd/stlib` | everything, wiring only |
 
 ## Usage
@@ -121,6 +130,14 @@ API:
 | `GET /api/issues` | folders that don't follow the convention |
 | `GET /api/variants/{id}/zip` | a variant's parts as a zip (stored uncompressed, streamed) |
 | `GET /api/parts/{id}`, `GET /api/images/{id}` | single files |
+| `GET /api/images/{id}/thumb`, `GET /api/models/{id}/thumb` | image thumbnail; model preview (cover thumbnail or STL render) |
+| `GET /api/tags`, `PUT /api/models/{id}/tags` | tags with counts; replace a model's tags (`{"tags": [...]}`) |
+| `PUT /api/models/{id}/name` | display name (`{"name": "..."}`, empty = folder name) |
+| `POST /api/variants/{id}/prints`, `DELETE /api/prints/{id}` | record a print (`{"note": "..."}`); delete a record |
+| `GET /api/queue`, `PUT`/`DELETE /api/variants/{id}/queue` | the print queue; add / remove a variant |
+
+Search takes `q`, `creator`, `tag`, `printed=yes|no`, `limit`, `offset`.
+Writes take `Content-Type: application/json` only.
 
 There is no authentication: keep it on a private network (it listens on
 localhost by default).
