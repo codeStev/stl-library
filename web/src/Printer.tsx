@@ -84,6 +84,7 @@ export function Printer() {
           <div className="job-title">
             {t.file} — {t.state}
             {t.start && t.state === "sending" && " (starts printing when done)"}
+            {t.state === "finalizing" && " - the printer is checking the file"}
             {t.error && <span className="error"> ({t.error})</span>}
           </div>
           <div className="progress">

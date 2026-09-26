@@ -59,6 +59,10 @@ type Mock struct {
 	ReadRate   int
 	ChunkDelay time.Duration
 	CheckDelay time.Duration
+	// FinalizeDelay keeps a finished upload under its temporary name for
+	// that long before it gets its real name (the real printer checks the
+	// file first: ~40 s for 206 MB).
+	FinalizeDelay time.Duration
 
 	mu        sync.Mutex
 	files     map[string][]byte // "/local/<name>" -> content
@@ -411,14 +415,28 @@ func (m *Mock) serveUpload(w http.ResponseWriter, r *http.Request) {
 		m.reply(w, 200, true, "")
 		return
 	}
-	delete(m.files, partial)
 	m.upload = nil
 	sum := md5.Sum(u.data)
 	if hex.EncodeToString(sum[:]) != u.md5 || u.offset != u.total {
+		delete(m.files, partial)
 		m.reply(w, 200, false, "md5 check failed")
 		return
 	}
-	m.files["/local/"+u.name] = u.data
+	final := "/local/" + u.name
+	if m.FinalizeDelay <= 0 {
+		delete(m.files, partial)
+		m.files[final] = u.data
+	} else {
+		m.files[partial] = u.data
+		time.AfterFunc(m.FinalizeDelay, func() {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			if data, ok := m.files[partial]; ok {
+				delete(m.files, partial)
+				m.files[final] = data
+			}
+		})
+	}
 	m.reply(w, 200, true, "")
 }
 

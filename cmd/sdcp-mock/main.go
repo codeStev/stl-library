@@ -27,10 +27,11 @@ func main() {
 	readRate := flag.Int("read-rate", 0, "simulated network: read uploads at most this many bytes/s (0 = unlimited)")
 	chunkDelay := flag.Duration("chunk-delay", 0, "simulated time the printer spends on each upload chunk")
 	checkDelay := flag.Duration("check-delay", 0, "simulated re-checking: extra time per chunk per MiB received so far (Check=1)")
+	finalizeDelay := flag.Duration("finalize-delay", 0, "keep a finished upload under its temporary name this long (the real printer checks it first)")
 	flag.Parse()
 	m := sdcptest.New()
 	m.Layers, m.LayerTime = *layers, *layerTime
-	m.ReadRate, m.ChunkDelay, m.CheckDelay = *readRate, *chunkDelay, *checkDelay
+	m.ReadRate, m.ChunkDelay, m.CheckDelay, m.FinalizeDelay = *readRate, *chunkDelay, *checkDelay, *finalizeDelay
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := m.Run(ctx, *httpAddr, *udpAddr); err != nil {

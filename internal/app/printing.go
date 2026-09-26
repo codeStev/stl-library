@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -42,7 +43,7 @@ type Transfer struct {
 	Size    int64
 	Sent    int64
 	Start   bool   // start printing when the upload is done
-	State   string // "sending", "done", "printing" (started), "failed", "cancelled"
+	State   string // "sending", "finalizing", "done", "printing" (started), "failed", "cancelled"
 	Error   string
 	Started time.Time
 }
@@ -83,6 +84,47 @@ type Printing struct {
 	current  Printer
 	currentS PrinterSettings
 	started  map[string]int64 // file on the printer -> part it was started from
+
+	// PollEvery is how often to look for a finished upload (3 s when 0);
+	// FinalizeTimeout overrides how long to wait for it (tests).
+	PollEvery       time.Duration
+	FinalizeTimeout time.Duration
+}
+
+// FinalizeTimeout is how long a printer may take to accept an uploaded
+// file of size bytes: 1 MB/s of checking plus a minute.
+func FinalizeTimeout(size int64) time.Duration {
+	return time.Minute + time.Duration(size/1_000_000)*time.Second
+}
+
+// WaitForFile waits until the printer lists an uploaded file under its
+// name. After the last chunk a printer first checks the file (a Saturn 4
+// Ultra kept a 206 MB upload under a temporary name for ~40 s), so it
+// can't be started right away.
+func WaitForFile(ctx context.Context, pr Printer, name string, timeout, every time.Duration) error {
+	if every <= 0 {
+		every = 3 * time.Second
+	}
+	want := printer.RemotePath(name)
+	deadline := time.Now().Add(timeout)
+	for {
+		files, err := pr.Files(ctx, path.Dir(want))
+		if err == nil {
+			for _, f := range files {
+				if f.Path == want {
+					return nil
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("the printer did not accept %s after the upload (its check of the file may have failed)", name)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(every):
+		}
+	}
 }
 
 // forgetStarted returns (and forgets) the part a print of file was started
@@ -198,7 +240,7 @@ func (p *Printing) Send(ctx context.Context, partID int64, start bool) (*Transfe
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.transfer != nil && p.transfer.State == "sending" {
+	if p.transfer != nil && (p.transfer.State == "sending" || p.transfer.State == "finalizing") {
 		return nil, fmt.Errorf("%w: %s is still being sent", ErrBusy, p.transfer.File)
 	}
 	t := &Transfer{PartID: partID, File: name, Size: part.Size, Start: start, State: "sending", Started: time.Now()}
@@ -217,6 +259,12 @@ func (p *Printing) run(ctx context.Context, pr Printer, part FileRef, t *Transfe
 		t.Sent = sent
 		p.mu.Unlock()
 	})
+	if err == nil {
+		p.mu.Lock()
+		t.State = "finalizing"
+		p.mu.Unlock()
+		err = WaitForFile(ctx, pr, t.File, cmp.Or(p.FinalizeTimeout, FinalizeTimeout(part.Size)), p.PollEvery)
+	}
 	if err == nil && t.Start {
 		err = pr.Start(ctx, t.File)
 	}

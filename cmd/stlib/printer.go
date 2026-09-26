@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -30,7 +31,8 @@ Commands:
                        upload only (never prints) and show where the time
                        goes per chunk: network vs. the printer. --max-chunks
                        stops early (and removes the partial file);
-                       --no-check and --chunk-kb try non-standard variants
+                       --no-check and --chunk-kb try variants (default
+                       128 KB chunks; the protocol's own size is 1024)
   print <name>         start a file already on the printer
   rm <name>...         delete files from the printer
   pause | resume | stop
@@ -174,7 +176,11 @@ func runPrinter(ctx context.Context, host, db string, args []string, out io.Writ
 			if f.Folder {
 				fmt.Fprintf(out, "  %s/  (%s / %s used)\n", path.Base(f.Path), size(f.Used), size(f.Total))
 			} else {
-				fmt.Fprintf(out, "  %s  (%s)\n", path.Base(f.Path), size(f.Size))
+				if f.Size > 0 {
+					fmt.Fprintf(out, "  %s  (%s)\n", path.Base(f.Path), size(f.Size))
+				} else { // the printer doesn't report file sizes
+					fmt.Fprintf(out, "  %s\n", path.Base(f.Path))
+				}
 			}
 		}
 	case "send":
@@ -197,7 +203,7 @@ func runPrinter(ctx context.Context, host, db string, args []string, out io.Writ
 			tr = &uploadTrace{out: out}
 			sp.UploadTrace = tr.chunk
 			fmt.Fprintf(out, "tracing the upload of %s (%s), chunk %s, Check=%v - no print is started\n",
-				path.Base(file), size(info.Size()), size(int64(max(chunkKB<<10, sdcp.ChunkSize))), !noCheck)
+				path.Base(file), size(info.Size()), size(int64(cmp.Or(chunkKB<<10, sdcp.ChunkSize))), !noCheck)
 			fmt.Fprintln(out, "  chunk  offset      connect    send     wait    network     rtt   rwnd-limited  window(min-max)  mss   retrans")
 		}
 		start := time.Now()
@@ -220,9 +226,15 @@ func runPrinter(ctx context.Context, host, db string, args []string, out io.Writ
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "uploaded in %s\n", time.Since(start).Round(time.Second))
+		fmt.Fprintf(out, "uploaded in %s; waiting for the printer to check the file ...\n", time.Since(start).Round(time.Second))
+		upload := time.Since(start)
+		checkStart := time.Now()
+		if err := app.WaitForFile(ctx, p, path.Base(file), app.FinalizeTimeout(info.Size()), 0); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "the printer accepted %s after %s\n", path.Base(file), time.Since(checkStart).Round(time.Second))
 		if tr != nil {
-			tr.summary(time.Since(start))
+			tr.summary(upload)
 		}
 		if doPrint {
 			if err := p.Start(ctx, path.Base(file)); err != nil {

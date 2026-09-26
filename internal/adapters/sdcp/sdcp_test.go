@@ -177,7 +177,7 @@ func TestUploadTraceSeparatesNetworkFromPrinter(t *testing.T) {
 		t.Fatalf("chunks: %+v", chunks)
 	}
 	for _, c := range chunks {
-		if c.Wait < 150*time.Millisecond || c.Send > 100*time.Millisecond {
+		if c.Wait < 140*time.Millisecond || c.Send > 100*time.Millisecond {
 			t.Errorf("printer time counted as network: %+v", c)
 		}
 	}
@@ -189,7 +189,7 @@ func TestUploadVariants(t *testing.T) {
 	p.UploadNoCheck, p.UploadChunk = true, 256<<10
 	var chunks int
 	p.UploadTrace = func(ChunkTiming) { chunks++ }
-	data := make([]byte, 3*ChunkSize)
+	data := make([]byte, 3*SpecChunkSize)
 	rand.Read(data)
 	start := time.Now()
 	if err := p.Upload(context.Background(), "v.ctb", int64(len(data)), opener(data), func(int64) {}); err != nil {

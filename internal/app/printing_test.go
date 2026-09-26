@@ -19,6 +19,10 @@ type fakePrinter struct {
 	started  []string
 	block    chan struct{} // uploads wait on it when set
 	actions  []string
+	// finalizeAfter: an upload shows up in Files only after that many
+	// listings (a printer checking the file first); -1 = never.
+	finalizeAfter int
+	listings      int
 }
 
 func (f *fakePrinter) Status(context.Context) (printer.Status, error) {
@@ -54,8 +58,20 @@ func (f *fakePrinter) Start(_ context.Context, name string) error {
 	f.started = append(f.started, name)
 	return nil
 }
-func (f *fakePrinter) Files(context.Context, string) ([]printer.File, error) { return nil, nil }
-func (f *fakePrinter) Delete(context.Context, []string) error                { return nil }
+func (f *fakePrinter) Files(context.Context, string) ([]printer.File, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.listings++
+	if f.finalizeAfter < 0 || f.listings <= f.finalizeAfter {
+		return nil, nil
+	}
+	var out []printer.File
+	for name := range f.uploaded {
+		out = append(out, printer.File{Path: printer.RemotePath(name)})
+	}
+	return out, nil
+}
+func (f *fakePrinter) Delete(context.Context, []string) error { return nil }
 func (f *fakePrinter) Pause(context.Context) error {
 	f.actions = append(f.actions, "pause")
 	return nil
@@ -213,5 +229,33 @@ func TestPrinterSettingsSavedOverDefaultAndSwitchOver(t *testing.T) {
 	}
 	if st, err := p.TestConfig(ctx, PrinterSettings{Host: "other"}); err != nil || st.Machine != printer.Idle {
 		t.Errorf("test: %+v %v", st, err)
+	}
+}
+
+func TestSendWaitsUntilThePrinterAcceptedTheFile(t *testing.T) {
+	fp := &fakePrinter{machine: printer.Idle, uploaded: map[string]string{}, finalizeAfter: 2}
+	p := withPrinter(fp)
+	p.PollEvery = 10 * time.Millisecond
+	if _, err := p.Send(context.Background(), 1, true); err != nil {
+		t.Fatal(err)
+	}
+	wait(t, p, "printing")
+	fp.mu.Lock()
+	defer fp.mu.Unlock()
+	if fp.listings != 3 || len(fp.started) != 1 {
+		t.Errorf("started after %d listings: %v", fp.listings, fp.started)
+	}
+}
+
+func TestSendFailsWhenThePrinterNeverAcceptsTheFile(t *testing.T) {
+	fp := &fakePrinter{machine: printer.Idle, uploaded: map[string]string{}, finalizeAfter: -1}
+	p := withPrinter(fp)
+	p.PollEvery, p.FinalizeTimeout = 10*time.Millisecond, 50*time.Millisecond
+	if _, err := p.Send(context.Background(), 1, true); err != nil {
+		t.Fatal(err)
+	}
+	tr := wait(t, p, "failed")
+	if len(fp.started) != 0 || !strings.Contains(tr.Error, "did not accept") {
+		t.Errorf("started %v, error %q", fp.started, tr.Error)
 	}
 }
