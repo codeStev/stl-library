@@ -8,6 +8,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Files opens library files for reading. Paths are relative to Root in
@@ -26,3 +27,5 @@ func (f Files) Open(_ context.Context, rel string) (io.ReadCloser, error) {
 	}
 	return os.Open(filepath.Join(f.Root, filepath.FromSlash(clean[1:])))
 }
+
+func timeUnix(s int64) time.Time { return time.Unix(s, 0) }

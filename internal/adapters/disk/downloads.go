@@ -1,0 +1,250 @@
+package disk
+
+import (
+	"archive/zip"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
+
+	"github.com/codeStev/stl-library/internal/core/importer"
+)
+
+// Downloads reads a downloads folder, looking into zip archives. It only
+// reads.
+type Downloads struct {
+	Root string
+}
+
+func (d Downloads) List(ctx context.Context) ([]importer.File, error) {
+	var out []importer.File
+	err := filepath.WalkDir(d.Root, func(p string, e fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if p != d.Root && strings.HasPrefix(e.Name(), ".") {
+			if e.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if e.IsDir() || !e.Type().IsRegular() {
+			return nil
+		}
+		info, err := e.Info()
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(d.Root, p)
+		out = append(out, importer.File{Rel: filepath.ToSlash(rel), Size: info.Size(), ModUnix: info.ModTime().Unix()})
+		return nil
+	})
+	return out, err
+}
+
+func (d Downloads) unitPath(unit, rel string) string {
+	return filepath.Join(d.Root, filepath.FromSlash(unit), filepath.FromSlash(rel))
+}
+
+// Expand replaces zip archives by their entries: an entry "foo\bar.stl"
+// of "sub/x.zip" becomes "sub/x/foo/bar.stl".
+func (d Downloads) Expand(_ context.Context, unit string, files []importer.File) ([]importer.File, error) {
+	var out []importer.File
+	for _, f := range files {
+		if !importer.IsArchive(f.Rel) {
+			out = append(out, f)
+			continue
+		}
+		zr, err := zip.OpenReader(d.unitPath(unit, f.Rel))
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", f.Rel, err)
+		}
+		base := strings.TrimSuffix(f.Rel, path.Ext(f.Rel))
+		for _, e := range zr.File {
+			if e.FileInfo().IsDir() {
+				continue
+			}
+			name, ok := entryPath(e.Name)
+			if !ok {
+				zr.Close()
+				return nil, fmt.Errorf("%s: unsafe entry %q", f.Rel, e.Name)
+			}
+			out = append(out, importer.File{Rel: base + "/" + name, Archive: f.Rel, Entry: e.Name,
+				Size: int64(e.UncompressedSize64), ModUnix: f.ModUnix})
+		}
+		zr.Close()
+	}
+	return out, nil
+}
+
+// entryPath cleans a zip entry name (Windows zips use backslashes) and
+// refuses names that would leave the folder.
+func entryPath(name string) (string, bool) {
+	name = strings.ReplaceAll(name, `\`, "/")
+	clean := path.Clean("/" + name)[1:]
+	if clean == "" || strings.HasPrefix(name, "/") || strings.Contains(name, "../") || strings.HasPrefix(name, "..") || strings.Contains(clean, ":") {
+		return "", false
+	}
+	return clean, true
+}
+
+// Each streams files, opening every archive once.
+func (d Downloads) Each(ctx context.Context, unit string, files []importer.File, fn func(importer.File, io.Reader) error) error {
+	byArchive := map[string][]importer.File{}
+	var plain []importer.File
+	for _, f := range files {
+		if f.Archive == "" {
+			plain = append(plain, f)
+		} else {
+			byArchive[f.Archive] = append(byArchive[f.Archive], f)
+		}
+	}
+	for _, f := range plain {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := func() error {
+			r, err := os.Open(d.unitPath(unit, f.Rel))
+			if err != nil {
+				return err
+			}
+			defer r.Close()
+			return fn(f, r)
+		}(); err != nil {
+			return err
+		}
+	}
+	for archive, entries := range byArchive {
+		if err := d.eachEntry(ctx, unit, archive, entries, fn); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (d Downloads) eachEntry(ctx context.Context, unit, archive string, entries []importer.File, fn func(importer.File, io.Reader) error) error {
+	zr, err := zip.OpenReader(d.unitPath(unit, archive))
+	if err != nil {
+		return err
+	}
+	defer zr.Close()
+	byName := map[string]*zip.File{}
+	for _, e := range zr.File {
+		byName[e.Name] = e
+	}
+	for _, f := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		e := byName[f.Entry]
+		if e == nil {
+			return fmt.Errorf("%s: entry %q vanished", archive, f.Entry)
+		}
+		if err := func() error {
+			r, err := e.Open()
+			if err != nil {
+				return err
+			}
+			defer r.Close()
+			return fn(f, r)
+		}(); err != nil {
+			return fmt.Errorf("%s: %w", archive, err)
+		}
+	}
+	return nil
+}
+
+// LibraryWriter adds files to the library. It never overwrites.
+type LibraryWriter struct {
+	Root string
+}
+
+// ErrExists is returned when writing would overwrite a file.
+var ErrExists = errors.New("file exists")
+
+func (w LibraryWriter) full(rel string) (string, error) {
+	clean := path.Clean("/" + rel)
+	if rel == "" || clean != "/"+rel {
+		return "", ErrOutsideRoot
+	}
+	return filepath.Join(w.Root, filepath.FromSlash(clean[1:])), nil
+}
+
+func (w LibraryWriter) Stat(_ context.Context, rel string) (int64, bool, error) {
+	p, err := w.full(rel)
+	if err != nil {
+		return 0, false, err
+	}
+	info, err := os.Stat(p)
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return info.Size(), true, nil
+}
+
+// Write copies r into a hidden temporary file next to the target and
+// renames it when complete, so a half-written file never appears under
+// its real name (the library listing skips hidden files).
+func (w LibraryWriter) Write(_ context.Context, rel string, r io.Reader, modUnix int64) error {
+	p, err := w.full(rel)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(p), ".stlib-import-*")
+	if err != nil {
+		return err
+	}
+	done := false
+	defer func() {
+		if !done {
+			tmp.Close()
+			os.Remove(tmp.Name())
+		}
+	}()
+	if _, err := io.Copy(tmp, r); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if _, err := os.Stat(p); err == nil {
+		return ErrExists
+	}
+	if err := os.Rename(tmp.Name(), p); err != nil {
+		return err
+	}
+	done = true
+	if modUnix > 0 {
+		t := timeUnix(modUnix)
+		_ = os.Chtimes(p, t, t)
+	}
+	return nil
+}
+
+func (w LibraryWriter) Creators(context.Context) ([]string, error) {
+	entries, err := os.ReadDir(w.Root)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, e := range entries {
+		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") && !strings.HasPrefix(e.Name(), "_") {
+			out = append(out, e.Name())
+		}
+	}
+	return out, nil
+}
