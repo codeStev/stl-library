@@ -114,6 +114,19 @@ export function formatDuration(ms: number): string {
   return `${s} s`;
 }
 
+export interface ScanState {
+  running: boolean;
+  started?: number;
+  finished?: number;
+  added: number;
+  updated: number;
+  removed: number;
+  unchanged: number;
+  issues: number;
+  pruned: number;
+  error?: string;
+}
+
 export interface ImportRecord {
   source: string;
   state: "existing" | "waiting" | "queued" | "imported" | "failed";
@@ -234,6 +247,8 @@ export const api = {
   notificationSettings: () => get<NotificationSettings>("/api/settings/notifications"),
   saveNotificationSettings: (s: NotificationSettings) => send("PUT", "/api/settings/notifications", s),
   testNotifications: (s: NotificationSettings) => send("POST", "/api/settings/notifications/test", s),
+  scanState: () => get<ScanState>("/api/library/scan"),
+  requestScan: () => send("POST", "/api/library/scan"),
   imports: () => get<{ enabled: boolean; records: ImportRecord[] }>("/api/imports"),
   requestImport: (source: string) => send("POST", "/api/imports/request", { source }),
   enqueue: (variantId: number, note = "") => send("PUT", `/api/variants/${variantId}/queue`, { note }),

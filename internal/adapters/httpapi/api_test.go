@@ -529,3 +529,35 @@ func TestNotificationSettingsNeverReturnSecrets(t *testing.T) {
 		t.Errorf("invalid: %d", code)
 	}
 }
+
+func TestRescanNow(t *testing.T) {
+	status := app.NewScanStatus()
+	srv := httptest.NewServer((&API{Scan: status}).Handler())
+	defer srv.Close()
+	post := func() int {
+		resp, err := http.Post(srv.URL+"/api/library/scan", "application/json", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if code := post(); code != 202 {
+		t.Errorf("first request: %d", code)
+	}
+	if code := post(); code != 409 {
+		t.Errorf("second request while queued: %d", code)
+	}
+	select {
+	case <-status.Wakeup():
+	default:
+		t.Error("the scan loop was not woken")
+	}
+	status.Start(time.Unix(100, 0))
+	status.Done(time.Unix(105, 0), app.SyncStats{Added: 3, Unchanged: 7}, nil, 2)
+	var st scanStateJSON
+	getJSON(t, srv, "/api/library/scan", &st)
+	if st.Running || st.Finished != 105 || st.Added != 3 || st.Pruned != 2 {
+		t.Errorf("state %+v", st)
+	}
+}

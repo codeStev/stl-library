@@ -80,15 +80,16 @@ func serve(ctx context.Context, root, data, listen string, every time.Duration, 
 		debug.SetMemoryLimit(150 << 20)
 	}
 
-	rescan := make(chan struct{}, 1)
+	scanStatus := app.NewScanStatus()
+	api.Scan = scanStatus
 	var importer *app.Importer
 	if imp != nil {
 		importer = &app.Importer{Downloads: disk.Downloads{Root: imp.source}, Library: disk.LibraryWriter{Root: root}, Log: store, Settle: imp.settle,
 			DeleteImported: imp.delete}
 		api.Importer = importer
-		go importLoop(ctx, importer, notifications, imp.every, rescan)
+		go importLoop(ctx, importer, notifications, imp.every, scanStatus)
 	}
-	go scanLoop(ctx, disk.Lister{Root: root}, store, thumbs, every, rescan)
+	go scanLoop(ctx, disk.Lister{Root: root}, store, thumbs, every, scanStatus)
 
 	errc := make(chan error, 1)
 	go func() {
@@ -110,7 +111,7 @@ func serve(ctx context.Context, root, data, listen string, every time.Duration, 
 
 // importLoop imports new downloads every interval; when something was
 // imported it asks for a rescan.
-func importLoop(ctx context.Context, im *app.Importer, notes *app.Notifications, every time.Duration, rescan chan<- struct{}) {
+func importLoop(ctx context.Context, im *app.Importer, notes *app.Notifications, every time.Duration, scans *app.ScanStatus) {
 	for {
 		start := time.Now()
 		sum, err := im.Run(ctx)
@@ -132,10 +133,7 @@ func importLoop(ctx context.Context, im *app.Importer, notes *app.Notifications,
 				Message: fmt.Sprintf("%d download folder(s) could not be imported - see the Imports page.", sum.Failed)})
 		}
 		if sum.Files > 0 {
-			select {
-			case rescan <- struct{}{}:
-			default:
-			}
+			scans.Request()
 		}
 		select {
 		case <-ctx.Done():
@@ -145,10 +143,15 @@ func importLoop(ctx context.Context, im *app.Importer, notes *app.Notifications,
 	}
 }
 
-func scanLoop(ctx context.Context, l app.Lister, s app.Store, thumbs *app.Thumbs, every time.Duration, rescan <-chan struct{}) {
+// scanLoop rescans the library every interval, or when asked (an admin's
+// "Rescan now", a finished import); after a successful scan it drops stale
+// thumbnails and makes the missing ones.
+func scanLoop(ctx context.Context, l app.Lister, s app.Store, thumbs *app.Thumbs, every time.Duration, status *app.ScanStatus) {
 	for {
 		start := time.Now()
+		status.Start(start)
 		st, err := app.Scan(ctx, l, s)
+		pruned := 0
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -157,6 +160,15 @@ func scanLoop(ctx context.Context, l app.Lister, s app.Store, thumbs *app.Thumbs
 		} else {
 			slog.Info("scan done", "took", time.Since(start).Round(time.Millisecond), "added", st.Added,
 				"updated", st.Updated, "removed", st.Removed, "unchanged", st.Unchanged, "issues", st.Issues)
+			var perr error
+			if pruned, perr = thumbs.Prune(ctx); perr != nil {
+				slog.Warn("removing stale thumbnails", "err", perr)
+			} else if pruned > 0 {
+				slog.Info("removed stale thumbnails", "count", pruned)
+			}
+		}
+		status.Done(time.Now(), st, err, pruned)
+		if err == nil {
 			start = time.Now()
 			made, failed := thumbs.WarmCovers(ctx)
 			if made+failed > 0 {
@@ -172,7 +184,7 @@ func scanLoop(ctx context.Context, l app.Lister, s app.Store, thumbs *app.Thumbs
 		case <-ctx.Done():
 			return
 		case <-time.After(every):
-		case <-rescan:
+		case <-status.Wakeup():
 		}
 	}
 }

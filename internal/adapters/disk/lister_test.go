@@ -74,3 +74,26 @@ func TestThumbCacheRoundTrip(t *testing.T) {
 		t.Errorf("got %q %v %v", data, ok, err)
 	}
 }
+
+func TestThumbCacheKeysAndDelete(t *testing.T) {
+	c := ThumbCache{Dir: t.TempDir()}
+	k := "0123456789abcdef0123456789abcdef"
+	c.Put(k, []byte("jpg"))
+	os.WriteFile(filepath.Join(c.Dir, "01", "notes.txt"), []byte("x"), 0o644) // not a thumbnail
+	keys, err := c.Keys()
+	if err != nil || len(keys) != 1 || keys[0] != k {
+		t.Fatalf("keys %v %v", keys, err)
+	}
+	if err := c.Delete("../../etc/passwd"); err == nil {
+		t.Error("deleted a non-key")
+	}
+	if err := c.Delete(k); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := c.Get(k); ok {
+		t.Error("still cached")
+	}
+	if _, err := os.Stat(filepath.Join(c.Dir, "01", "notes.txt")); err != nil {
+		t.Error("removed an unrelated file")
+	}
+}

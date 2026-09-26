@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { api, EVENT_LABELS, type NotificationSettings, type PrinterSettings } from "./api";
+import { api, EVENT_LABELS, type NotificationSettings, type PrinterSettings, type ScanState } from "./api";
 
 // Settings: the printer and notifications.
 export function Settings() {
   return (
     <>
+      <LibrarySection />
       <PrinterSection />
       <NotificationsSection />
     </>
@@ -220,6 +221,54 @@ function NotificationsSection() {
         </div>
       </form>
       {msg && <p className="ok">{msg}</p>}
+      {error && <p className="error">{error}</p>}
+    </div>
+  );
+}
+
+// LibrarySection: the last scan, and "Rescan now".
+function LibrarySection() {
+  const [st, setSt] = useState<ScanState | null>(null);
+  const [error, setError] = useState("");
+  const [asked, setAsked] = useState(false);
+  const load = () => api.scanState().then(setSt, (e) => setError(String(e)));
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 3000); // shows a running scan finishing
+    return () => clearInterval(t);
+  }, []);
+  const rescan = () => {
+    setError("");
+    setAsked(true);
+    api.requestScan().then(load, (e) => setError(String(e)));
+  };
+  const when = (u?: number) => (u ? new Date(u * 1000).toLocaleString() : "");
+  return (
+    <div className="settings">
+      <h2>Library</h2>
+      <p className="sub">
+        The library is scanned at startup and then regularly (SCAN_INTERVAL); new imports trigger a scan too. After a
+        scan, thumbnails of files that moved or are gone are removed.
+      </p>
+      {st &&
+        (st.running ? (
+          <p>Scanning… (started {when(st.started)})</p>
+        ) : st.finished ? (
+          <p>
+            Last scan {when(st.finished)}: {st.added} added, {st.updated} changed, {st.removed} removed, {st.unchanged}{" "}
+            unchanged, {st.issues} not following the convention
+            {st.pruned > 0 && `, ${st.pruned} stale thumbnails removed`}.
+            {st.error && <span className="error"> Failed: {st.error}</span>}
+          </p>
+        ) : (
+          <p>The first scan hasn't finished yet.</p>
+        ))}
+      <div className="actions">
+        <button onClick={rescan} disabled={!!st?.running}>
+          Rescan now
+        </button>
+        {asked && !st?.running && !error && <span className="sub">Scan requested.</span>}
+      </div>
       {error && <p className="error">{error}</p>}
     </div>
   );

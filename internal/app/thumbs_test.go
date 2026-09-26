@@ -33,6 +33,14 @@ type memCache map[string][]byte
 
 func (m memCache) Get(k string) ([]byte, bool, error) { d, ok := m[k]; return d, ok, nil }
 func (m memCache) Put(k string, d []byte) error       { m[k] = d; return nil }
+func (m memCache) Delete(k string) error              { delete(m, k); return nil }
+func (m memCache) Keys() ([]string, error) {
+	var out []string
+	for k := range m {
+		out = append(out, k)
+	}
+	return out, nil
+}
 
 func TestThumbnailIsMadeOnceThenServedFromTheCache(t *testing.T) {
 	var src bytes.Buffer
@@ -125,5 +133,40 @@ func TestModelPreviewFallsBackToARenderedSTL(t *testing.T) {
 	}
 	if _, err := png.Decode(bytes.NewReader(data)); err != nil {
 		t.Errorf("not a PNG: %v", err)
+	}
+}
+
+type pruneStore struct {
+	Store
+	models []ModelSummary
+	detail map[int64]*ModelDetail
+}
+
+func (p pruneStore) Search(context.Context, Query) ([]ModelSummary, error) { return p.models, nil }
+func (p pruneStore) Model(_ context.Context, id int64) (*ModelDetail, error) {
+	return p.detail[id], nil
+}
+
+func TestPruneRemovesOnlyStaleThumbnails(t *testing.T) {
+	cover := FileRef{ID: 1, Path: "C/M/cover.jpg", Size: 10, ModUnix: 5}
+	part := FileRef{ID: 2, Path: "C/M/No Supports/m.stl", Size: 99, ModUnix: 5}
+	st := pruneStore{
+		models: []ModelSummary{{ID: 1}},
+		detail: map[int64]*ModelDetail{1: {Images: []FileRef{cover},
+			Variants: []VariantDetail{{Dims: convention.Dims{Supports: "No Supports"}, Parts: []FileRef{part}}}}},
+	}
+	live1 := cacheKey("image", cover.Path, cover.Size, cover.ModUnix)
+	live2 := cacheKey("render", part.Path, part.Size, part.ModUnix)
+	stale := cacheKey("image", "C/Old/moved.jpg", 10, 5)
+	cache := memCache{live1: nil, live2: nil, stale: nil}
+	th := NewThumbs(st, nil, cache)
+	n, err := th.Prune(context.Background())
+	if err != nil || n != 1 || len(cache) != 2 {
+		t.Fatalf("pruned %d (%v), left %v", n, err, cache)
+	}
+	// An empty index (e.g. the library isn't mounted) keeps everything.
+	th = NewThumbs(pruneStore{}, nil, cache)
+	if n, _ := th.Prune(context.Background()); n != 0 || len(cache) != 2 {
+		t.Errorf("empty index pruned %d", n)
 	}
 }

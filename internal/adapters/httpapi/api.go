@@ -31,6 +31,8 @@ type API struct {
 	Printing *app.Printing
 	// Notifications sends print and import events (ntfy, email).
 	Notifications *app.Notifications
+	// Scan is the background library scan (status, "rescan now").
+	Scan *app.ScanStatus
 	// Auth signs users in; without it every request is let through
 	// (tests only).
 	Auth *app.Auth
@@ -79,6 +81,8 @@ func (a *API) Handler() http.Handler {
 	h("GET /api/settings/notifications", admin, a.notificationSettings)
 	h("PUT /api/settings/notifications", admin, a.saveNotificationSettings)
 	h("POST /api/settings/notifications/test", admin, a.testNotifications)
+	h("GET /api/library/scan", full, a.scanState)
+	h("POST /api/library/scan", admin, a.requestScan)
 	h("GET /api/imports", full, a.imports)
 	h("POST /api/imports/request", admin, a.requestImport)
 	h("PUT /api/models/{id}/tags", full, a.setTags)
@@ -921,4 +925,48 @@ func writeJSON(w http.ResponseWriter, v any) {
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		slog.Warn("writing response", "err", err)
 	}
+}
+
+type scanStateJSON struct {
+	Running   bool   `json:"running"`
+	Started   int64  `json:"started,omitempty"`
+	Finished  int64  `json:"finished,omitempty"`
+	Added     int    `json:"added"`
+	Updated   int    `json:"updated"`
+	Removed   int    `json:"removed"`
+	Unchanged int    `json:"unchanged"`
+	Issues    int    `json:"issues"`
+	Pruned    int    `json:"pruned"`
+	Error     string `json:"error,omitempty"`
+}
+
+func unix(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
+}
+
+func (a *API) scanState(w http.ResponseWriter, r *http.Request) {
+	if a.Scan == nil {
+		http.Error(w, "no background scan", http.StatusNotFound)
+		return
+	}
+	st := a.Scan.Get()
+	writeJSON(w, scanStateJSON{st.Running, unix(st.Started), unix(st.Finished), st.Stats.Added, st.Stats.Updated,
+		st.Stats.Removed, st.Stats.Unchanged, st.Stats.Issues, st.Pruned, st.Error})
+}
+
+// requestScan asks for a rescan now; 202 when queued, 409 when one is
+// already running or queued.
+func (a *API) requestScan(w http.ResponseWriter, r *http.Request) {
+	if a.Scan == nil {
+		http.Error(w, "no background scan", http.StatusNotFound)
+		return
+	}
+	if !a.Scan.Request() {
+		http.Error(w, "a scan is already running or queued", http.StatusConflict)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
 }

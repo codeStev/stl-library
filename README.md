@@ -233,7 +233,7 @@ LIBRARY_ROOT=/path/to/library DATA_DIR=./data stlib serve
 | `LIBRARY_ROOT` | (required) | the library; only read, never written |
 | `DATA_DIR` | `./data` | the index (`index.db`) |
 | `LISTEN_ADDR` | `127.0.0.1:8080` | |
-| `SCAN_INTERVAL` | `1h` | time between rescans (at least `1m`); the first scan starts right away |
+| `SCAN_INTERVAL` | `1h` | time between rescans (at least `1m`); the first scan starts right away. Admins can also start one on the Settings page ("Rescan now"); a finished import triggers one too. After each scan, cached thumbnails of files that moved or are gone are removed. |
 | `IMPORT_SOURCE` | (off) | downloads folder to import from; the library must then be writable |
 | `PRINTER_ADDR` | (off) | default printer address `<host>[:<control port>]`; the Settings page overrides it |
 | `PRINTER_DISCOVERY_PORT` | `3000` | the printer's discovery port, if it differs |

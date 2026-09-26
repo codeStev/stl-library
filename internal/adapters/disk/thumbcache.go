@@ -2,9 +2,11 @@ package disk
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 )
 
 // ThumbCache stores thumbnails as files in Dir, one per key.
@@ -43,4 +45,44 @@ func (c ThumbCache) Put(key string, data []byte) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), p)
+}
+
+var reKey = regexp.MustCompile(`^[0-9a-f]{32}\.jpg$`)
+
+// Keys lists the cached keys (only files named like one).
+func (c ThumbCache) Keys() ([]string, error) {
+	var out []string
+	dirs, err := os.ReadDir(c.Dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range dirs {
+		if !d.IsDir() || len(d.Name()) != 2 {
+			continue
+		}
+		files, err := os.ReadDir(filepath.Join(c.Dir, d.Name()))
+		if err != nil {
+			return nil, err
+		}
+		for _, f := range files {
+			if reKey.MatchString(f.Name()) && f.Name()[:2] == d.Name() {
+				out = append(out, f.Name()[:32])
+			}
+		}
+	}
+	return out, nil
+}
+
+func (c ThumbCache) Delete(key string) error {
+	if !reKey.MatchString(key + ".jpg") {
+		return fmt.Errorf("not a thumbnail key: %q", key)
+	}
+	err := os.Remove(c.path(key))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	return err
 }

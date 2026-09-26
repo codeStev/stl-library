@@ -18,6 +18,9 @@ import (
 type ThumbCache interface {
 	Get(key string) ([]byte, bool, error)
 	Put(key string, data []byte) error
+	// Keys lists every cached key; Delete removes one.
+	Keys() ([]string, error)
+	Delete(key string) error
 }
 
 // ThumbSize is the edge length thumbnails fit into.
@@ -232,4 +235,44 @@ func (t *Thumbs) get(ctx context.Context, id int64) ([]byte, bool, error) {
 		defer r.Close()
 		return thumb.FromImage(r, w, ThumbSize)
 	})
+}
+
+// Prune removes cached thumbnails that no longer belong to any file of the
+// index (the file moved, changed or was deleted). It keeps everything when
+// the index is empty - an unmounted library must not wipe the cache.
+func (t *Thumbs) Prune(ctx context.Context) (int, error) {
+	models, err := t.Store.Search(ctx, Query{Limit: 1 << 30, Hidden: true})
+	if err != nil || len(models) == 0 {
+		return 0, err
+	}
+	keep := map[string]bool{}
+	for _, s := range models {
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
+		}
+		m, err := t.Store.Model(ctx, s.ID)
+		if err != nil {
+			return 0, err // an incomplete picture: keep everything
+		}
+		for _, img := range m.Images {
+			keep[cacheKey("image", img.Path, img.Size, img.ModUnix)] = true
+		}
+		if part := RenderPart(m); part != nil {
+			keep[cacheKey("render", part.Path, part.Size, part.ModUnix)] = true
+		}
+	}
+	keys, err := t.Cache.Keys()
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	for _, k := range keys {
+		if !keep[k] {
+			if err := t.Cache.Delete(k); err != nil {
+				return removed, err
+			}
+			removed++
+		}
+	}
+	return removed, nil
 }
