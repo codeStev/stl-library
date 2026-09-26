@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
+	"strings"
 	"syscall"
 	"time"
 
@@ -55,12 +56,20 @@ func serve(ctx context.Context, root, data, listen string, every time.Duration, 
 	if addr := os.Getenv("PRINTER_ADDR"); addr != "" {
 		printing.Default = parsePrinterAddr(addr)
 	}
+	auth, err := newAuth(store, keys)
+	if err != nil {
+		return err
+	}
 	api := &httpapi.API{Store: store, Files: files, Thumbs: thumbs, User: app.UserData{Store: store}, Printing: printing,
-		Notifications: notifications}
+		Notifications: notifications, Auth: auth, TrustProxy: os.Getenv("TRUST_PROXY_HEADERS") == "true",
+		SecureCookies: strings.HasPrefix(os.Getenv("PUBLIC_URL"), "https://")}
 	watcher := &app.PrintWatcher{Printing: printing, Store: store, Notify: notifications}
 	go watcher.Run(ctx, 20*time.Second)
 	mux := http.NewServeMux()
-	mux.Handle("/api/", api.Handler())
+	apiHandler := api.Handler()
+	mux.Handle("/api/", apiHandler)
+	mux.Handle("/oauth2/", apiHandler)       // Google sign-in: start
+	mux.Handle("/login/oauth2/", apiHandler) // and callback
 	mux.Handle("/", web.Handler())
 	srv := &http.Server{Addr: listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 

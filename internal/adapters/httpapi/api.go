@@ -13,6 +13,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/codeStev/stl-library/convention"
 	"github.com/codeStev/stl-library/internal/app"
@@ -30,46 +31,66 @@ type API struct {
 	Printing *app.Printing
 	// Notifications sends print and import events (ntfy, email).
 	Notifications *app.Notifications
+	// Auth signs users in; without it every request is let through
+	// (tests only).
+	Auth *app.Auth
+	// SecureCookies marks the session cookie Secure even when the request
+	// doesn't look like HTTPS (e.g. a proxy that sets no
+	// X-Forwarded-Proto).
+	SecureCookies bool
+	// TrustProxy takes the client address from X-Forwarded-For (only
+	// behind a reverse proxy that sets it).
+	TrustProxy bool
+
+	limits *limiter
 }
 
-// Handler routes /api/… requests.
+// Handler routes /api/… requests (and the Google sign-in redirects under
+// /oauth2/ and /login/oauth2/). Everything but signing in needs a full
+// login; settings, imports on request and the account roster need an
+// admin.
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/models", a.searchModels)
-	mux.HandleFunc("GET /api/models/{id}", a.model)
-	mux.HandleFunc("GET /api/models/{id}/thumb", a.modelThumb)
-	mux.HandleFunc("GET /api/creators", a.creators)
-	mux.HandleFunc("GET /api/issues", a.issues)
-	mux.HandleFunc("GET /api/variants/{id}/zip", a.variantZip)
-	mux.HandleFunc("GET /api/parts/{id}", a.part)
-	mux.HandleFunc("GET /api/images/{id}", a.image)
-	mux.HandleFunc("GET /api/images/{id}/thumb", a.thumb)
-	mux.HandleFunc("GET /api/tags", a.tags)
-	mux.HandleFunc("GET /api/printer", a.printerStatus)
-	mux.HandleFunc("POST /api/parts/{id}/print", a.sendToPrinter)
-	mux.HandleFunc("POST /api/printer/{action}", a.printerControl)
-	mux.HandleFunc("DELETE /api/printer/transfer", a.cancelTransfer)
-	mux.HandleFunc("GET /api/printer/files", a.printerFiles)
-	mux.HandleFunc("POST /api/printer/files/print", a.printExisting)
-	mux.HandleFunc("POST /api/printer/files/delete", a.deletePrinterFiles)
-	mux.HandleFunc("GET /api/settings/printer", a.printerSettings)
-	mux.HandleFunc("PUT /api/settings/printer", a.savePrinterSettings)
-	mux.HandleFunc("POST /api/settings/printer/test", a.testPrinterSettings)
-	mux.HandleFunc("GET /api/settings/notifications", a.notificationSettings)
-	mux.HandleFunc("PUT /api/settings/notifications", a.saveNotificationSettings)
-	mux.HandleFunc("POST /api/settings/notifications/test", a.testNotifications)
-	mux.HandleFunc("GET /api/imports", a.imports)
-	mux.HandleFunc("POST /api/imports/request", a.requestImport)
-	mux.HandleFunc("PUT /api/models/{id}/tags", a.setTags)
-	mux.HandleFunc("PUT /api/models/{id}/name", a.setName)
-	mux.HandleFunc("PUT /api/models/{id}/hidden", a.setHidden)
-	mux.HandleFunc("PUT /api/variants/{id}/label", a.setLabel)
-	mux.HandleFunc("DELETE /api/variants/{id}/label", a.resetLabel)
-	mux.HandleFunc("POST /api/variants/{id}/prints", a.addPrint)
-	mux.HandleFunc("DELETE /api/prints/{id}", a.deletePrint)
-	mux.HandleFunc("GET /api/queue", a.queue)
-	mux.HandleFunc("PUT /api/variants/{id}/queue", a.enqueue)
-	mux.HandleFunc("DELETE /api/variants/{id}/queue", a.dequeue)
+	if a.limits == nil {
+		a.limits = newLimiter(10, 30*time.Second)
+	}
+	h := func(pattern string, lvl level, f http.HandlerFunc) { mux.HandleFunc(pattern, a.guard(lvl, f)) }
+	a.authRoutes(h)
+	h("GET /api/models", full, a.searchModels)
+	h("GET /api/models/{id}", full, a.model)
+	h("GET /api/models/{id}/thumb", full, a.modelThumb)
+	h("GET /api/creators", full, a.creators)
+	h("GET /api/issues", full, a.issues)
+	h("GET /api/variants/{id}/zip", full, a.variantZip)
+	h("GET /api/parts/{id}", full, a.part)
+	h("GET /api/images/{id}", full, a.image)
+	h("GET /api/images/{id}/thumb", full, a.thumb)
+	h("GET /api/tags", full, a.tags)
+	h("GET /api/printer", full, a.printerStatus)
+	h("POST /api/parts/{id}/print", full, a.sendToPrinter)
+	h("POST /api/printer/{action}", full, a.printerControl)
+	h("DELETE /api/printer/transfer", full, a.cancelTransfer)
+	h("GET /api/printer/files", full, a.printerFiles)
+	h("POST /api/printer/files/print", full, a.printExisting)
+	h("POST /api/printer/files/delete", full, a.deletePrinterFiles)
+	h("GET /api/settings/printer", admin, a.printerSettings)
+	h("PUT /api/settings/printer", admin, a.savePrinterSettings)
+	h("POST /api/settings/printer/test", admin, a.testPrinterSettings)
+	h("GET /api/settings/notifications", admin, a.notificationSettings)
+	h("PUT /api/settings/notifications", admin, a.saveNotificationSettings)
+	h("POST /api/settings/notifications/test", admin, a.testNotifications)
+	h("GET /api/imports", full, a.imports)
+	h("POST /api/imports/request", admin, a.requestImport)
+	h("PUT /api/models/{id}/tags", full, a.setTags)
+	h("PUT /api/models/{id}/name", full, a.setName)
+	h("PUT /api/models/{id}/hidden", full, a.setHidden)
+	h("PUT /api/variants/{id}/label", full, a.setLabel)
+	h("DELETE /api/variants/{id}/label", full, a.resetLabel)
+	h("POST /api/variants/{id}/prints", full, a.addPrint)
+	h("DELETE /api/prints/{id}", full, a.deletePrint)
+	h("GET /api/queue", full, a.queue)
+	h("PUT /api/variants/{id}/queue", full, a.enqueue)
+	h("DELETE /api/variants/{id}/queue", full, a.dequeue)
 	return mux
 }
 
