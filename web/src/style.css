@@ -89,3 +89,34 @@ main { padding: 20px; max-width: 1400px; margin: 0 auto; }
 .viewer-bar button { font: inherit; font-size: 18px; background: none; border: none; color: var(--text); cursor: pointer; }
 .viewer-canvas { flex: 1; min-height: 0; }
 .viewer-status { position: absolute; inset: 50% 0 auto; text-align: center; color: var(--muted); }
+
+button { font: inherit; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+.actions .download { margin-bottom: 0; }
+.actions button, .queue-actions button, .queue-actions .button, .name-edit button, .print-form button {
+  font-size: 14px; padding: 7px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; text-decoration: none;
+}
+button.link { background: none; border: none; color: var(--muted); cursor: pointer; padding: 0 4px; font-size: 14px; }
+.model h1 button.link { font-size: 16px; margin-left: 6px; }
+.folder-name { font-size: 13px; font-weight: normal; color: var(--muted); margin-left: 10px; }
+.name-edit, .print-form { display: flex; gap: 8px; margin: 4px 0 12px; flex-wrap: wrap; }
+.name-edit input, .print-form input, .tags.editable input {
+  font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text);
+}
+.name-edit input { font-size: 22px; font-weight: 600; min-width: 280px; }
+.tags { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 10px 10px; }
+.tags.editable { padding: 0 0 12px; align-items: center; gap: 6px; }
+.tags.editable input { font-size: 13px; padding: 3px 8px; width: 130px; }
+.tag { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--line); color: var(--text); display: inline-flex; align-items: center; }
+.tags.editable .tag { font-size: 13px; }
+.cover { position: relative; }
+.badge { position: absolute; top: 6px; right: 6px; background: var(--accent); color: var(--accent-text); font-size: 11px; padding: 2px 7px; border-radius: 999px; }
+.prints { list-style: none; padding: 0; margin: 0 0 12px; font-size: 13px; color: var(--muted); }
+.queue { list-style: none; padding: 0; }
+.queue li { display: flex; gap: 14px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin-bottom: 8px; }
+.queue img { width: 72px; height: 72px; object-fit: cover; border-radius: 8px; background: var(--line); }
+.queue-text { flex: 1; min-width: 0; }
+.queue .title { font-weight: 600; text-decoration: none; }
+.queue .sub { color: var(--muted); font-size: 13px; }
+.queue-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.render { background: var(--line); }
