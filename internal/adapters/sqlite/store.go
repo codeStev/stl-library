@@ -109,6 +109,33 @@ var migrations = []string{
 		scale TEXT NOT NULL, supports TEXT NOT NULL, density TEXT NOT NULL, format TEXT NOT NULL,
 		fill TEXT NOT NULL, split TEXT NOT NULL, tech TEXT NOT NULL, extra TEXT NOT NULL
 	);`,
+
+	// Accounts and everything around signing in (see accounts.go).
+	`CREATE TABLE account (
+		id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL,
+		auth_provider TEXT NOT NULL, external_subject TEXT NOT NULL, role TEXT NOT NULL,
+		enabled INTEGER NOT NULL, token_version INTEGER NOT NULL, failed_attempts INTEGER NOT NULL,
+		locked_until INTEGER NOT NULL, mfa TEXT NOT NULL, totp_secret TEXT NOT NULL,
+		totp_pending TEXT NOT NULL, created_unix INTEGER NOT NULL
+	);
+	CREATE UNIQUE INDEX account_external ON account (auth_provider, external_subject) WHERE auth_provider != '';
+	CREATE TABLE recovery_code (
+		id INTEGER PRIMARY KEY, account_id TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+		hash TEXT NOT NULL, used_unix INTEGER NOT NULL DEFAULT 0
+	);
+	CREATE INDEX recovery_code_account ON recovery_code (account_id);
+	CREATE TABLE account_session (
+		id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+		created_unix INTEGER NOT NULL, expires_unix INTEGER NOT NULL, revoked_unix INTEGER NOT NULL DEFAULT 0,
+		user_agent TEXT NOT NULL, ip TEXT NOT NULL
+	);
+	CREATE INDEX account_session_account ON account_session (account_id);
+	CREATE TABLE webauthn_credential (
+		id BLOB PRIMARY KEY, account_id TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+		data BLOB NOT NULL, name TEXT NOT NULL, created_unix INTEGER NOT NULL
+	);
+	CREATE INDEX webauthn_credential_account ON webauthn_credential (account_id);
+	CREATE TABLE ephemeral (key TEXT PRIMARY KEY, value BLOB NOT NULL, expires_unix INTEGER NOT NULL);`,
 }
 
 func migrate(db *sql.DB) error {
