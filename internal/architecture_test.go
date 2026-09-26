@@ -1,6 +1,6 @@
 // The dependency rule, enforced (hexagonal):
-//   - convention: the pure, public definition of the folder convention
-//   - internal/core: the domain, pure (no I/O), may use convention
+//   - internal/core: the domain, pure (no I/O), may use the convention
+//     (github.com/codeStev/stl-convention, pure by its own test)
 //   - internal/app: use cases and the ports they need; no I/O, no adapters
 //   - internal/adapters: implement the ports (disk, database, HTTP)
 //   - cmd: wires adapters into use cases
@@ -29,7 +29,6 @@ var rules = []struct {
 	dir       string
 	forbidden []string
 }{
-	{"../convention", append(append([]string{}, ioPackages...), module+"internal")},
 	{"core", append(append([]string{}, ioPackages...), module+"internal/app", module+"internal/adapters", module+"cmd")},
 	{"app", append(append([]string{}, ioPackages...), module+"internal/adapters", module+"cmd")},
 	{"adapters", []string{module + "cmd"}},

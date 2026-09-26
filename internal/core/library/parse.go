@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/codeStev/stl-library/convention"
+	convention "github.com/codeStev/stl-convention"
 )
 
 // Read groups a listing into models following the convention:

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/codeStev/stl-library/convention"
+	convention "github.com/codeStev/stl-convention"
 )
 
 type zipStore struct{ Store }

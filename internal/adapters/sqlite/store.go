@@ -12,7 +12,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/codeStev/stl-library/convention"
+	convention "github.com/codeStev/stl-convention"
 	"github.com/codeStev/stl-library/internal/app"
 	"github.com/codeStev/stl-library/internal/core/library"
 )

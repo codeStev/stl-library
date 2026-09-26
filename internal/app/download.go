@@ -8,7 +8,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/codeStev/stl-library/convention"
+	convention "github.com/codeStev/stl-convention"
 )
 
 // Files opens library files for reading, by path relative to the library

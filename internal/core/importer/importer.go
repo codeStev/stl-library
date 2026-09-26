@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/codeStev/stl-library/convention"
+	convention "github.com/codeStev/stl-convention"
 )
 
 // File is a file of a download folder, possibly inside a zip archive.

@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/codeStev/stl-library/convention"
+	convention "github.com/codeStev/stl-convention"
 	"github.com/codeStev/stl-library/internal/app"
 )
 

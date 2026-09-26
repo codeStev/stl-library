@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/codeStev/stl-library/convention"
+	convention "github.com/codeStev/stl-convention"
 	"github.com/codeStev/stl-library/internal/core/library"
 )
 

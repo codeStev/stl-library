@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codeStev/stl-library/convention"
+	convention "github.com/codeStev/stl-convention"
 )
 
 type userStore struct {

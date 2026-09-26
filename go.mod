@@ -3,6 +3,7 @@ module github.com/codeStev/stl-library
 go 1.27.1
 
 require (
+	github.com/codeStev/stl-convention v0.1.0
 	github.com/coder/websocket v1.8.15
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/fxamacker/cbor/v2 v2.9.4
