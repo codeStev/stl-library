@@ -28,6 +28,9 @@ import (
 	"github.com/codeStev/stl-library/internal/platform/lowprio"
 )
 
+// version is set at build time (-ldflags "-X main.version=…").
+var version = "dev"
+
 const usage = `usage:
   stlib check <library-root>
   stlib scan --db <index.db> <library-root>
@@ -60,6 +63,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	}
 	rest := fs.Args()
 	switch args[0] {
+	case "version":
+		fmt.Fprintln(out, version)
 	case "check":
 		if len(rest) != 1 {
 			return errors.New(usage)

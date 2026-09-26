@@ -51,7 +51,7 @@ func serve(ctx context.Context, root, data, listen string, every time.Duration) 
 
 	errc := make(chan error, 1)
 	go func() {
-		slog.Info("listening", "addr", listen, "library", root)
+		slog.Info("listening", "addr", listen, "library", root, "version", version)
 		errc <- srv.ListenAndServe()
 	}()
 	select {
