@@ -204,6 +204,14 @@ ul.plain li { display: flex; justify-content: space-between; gap: 12px; padding:
 table.roster { border-collapse: collapse; width: 100%; font-size: 14px; }
 table.roster th, table.roster td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
 table.roster tr.disabled td { opacity: 0.6; }
-table.roster .actions button { margin: 0 12px 4px 0; }
+table.roster .row-actions button { margin: 0 12px 4px 0; }
 table.roster select { font: inherit; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; }
 @media (max-width: 700px) { table.roster thead { display: none; } table.roster td { display: block; border: none; } table.roster tr { display: block; border-bottom: 1px solid var(--line); } }
+.add-account { max-width: 420px; margin: 0 0 16px; }
+.add-account label { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.add-account input, .add-account select {
+  font: inherit; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text);
+}
+.settings > button, .add-account button:not(.primary) {
+  font: inherit; padding: 8px 16px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; margin-bottom: 16px;
+}

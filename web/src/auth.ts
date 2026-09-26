@@ -23,6 +23,7 @@ export interface LoginResult {
 export interface AuthOptions {
   google?: boolean;
   passkeys?: boolean;
+  registration?: boolean; // anyone may create an account
   open?: boolean; // the server runs without sign-in
 }
 
@@ -50,6 +51,7 @@ export interface Account {
   provider?: string;
   locked: boolean;
   created: number;
+  waiting?: boolean; // a Google account that hasn't signed in yet
 }
 
 // HttpError keeps the status so pages can tell "wrong code" from "too
@@ -116,6 +118,8 @@ export const auth = {
   deletePasskey: (id: string) => call<void>("DELETE", `/api/accounts/me/passkeys/${id}`),
 
   accounts: () => call<Account[]>("GET", "/api/accounts"),
+  createAccount: (a: { email: string; password?: string; google?: boolean; role: "ADMIN" | "USER" }) =>
+    call<Account>("POST", "/api/accounts", a),
   changeAccount: (
     id: string,
     change: { role?: "ADMIN" | "USER"; enabled?: boolean; newPassword?: string; resetMfa?: boolean },

@@ -51,6 +51,11 @@ export function SignedIn({ children }: { children: (me: Me, signOut: () => void)
     return () => removeEventListener(SIGNED_OUT, out);
   }, []);
 
+  // Registration may have closed since (e.g. after the first account).
+  useEffect(() => {
+    if (stage.kind === "login") auth.options().then(setOptions, () => {});
+  }, [stage.kind]);
+
   const signOut = () => {
     auth.logout().finally(() => setStage({ kind: "login", notice: "Signed out." }));
   };
@@ -161,9 +166,11 @@ function Login(props: {
         </a>
       )}
       <p className="links">
-        <button className="link" onClick={() => props.go("register")}>
-          Create an account
-        </button>
+        {props.options.registration !== false && (
+          <button className="link" onClick={() => props.go("register")}>
+            Create an account
+          </button>
+        )}
         <button className="link" onClick={() => props.go("recover")}>
           Forgot password?
         </button>

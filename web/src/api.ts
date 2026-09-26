@@ -101,6 +101,7 @@ export const EVENT_LABELS: Record<string, string> = {
   "print.error": "The printer reported an error",
   "import.done": "New models were imported",
   "import.failed": "An import needs attention",
+  "account.registered": "Someone created an account",
 };
 
 export const printable = (name: string) => /\.(ctb|goo)$/i.test(name);
