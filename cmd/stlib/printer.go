@@ -26,6 +26,10 @@ Commands:
   files [dir]          list the printer's storage (default /local; "/" for volumes)
   send <file> [--print]
                        upload a sliced file (.ctb/.goo), optionally start it
+  send <file> --trace [--no-check] [--chunk-kb N]
+                       upload only (never prints) and show where the time
+                       goes per chunk: network vs. the printer; --no-check
+                       and --chunk-kb try non-standard variants
   print <name>         start a file already on the printer
   rm <name>...         delete files from the printer
   pause | resume | stop
@@ -79,14 +83,35 @@ func newPrinter(s app.PrinterSettings) app.Printer {
 }
 
 func runPrinter(ctx context.Context, host, db string, args []string, out io.Writer) error {
-	doPrint := false
+	doPrint, trace, noCheck, chunkKB := false, false, false, 0
 	var rest []string
-	for _, a := range args {
-		if a == "--print" {
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; a {
+		case "--print":
 			doPrint = true
-		} else {
+		case "--trace":
+			trace = true
+		case "--no-check":
+			noCheck = true
+		case "--chunk-kb":
+			if i+1 >= len(args) {
+				return errors.New("--chunk-kb needs a number")
+			}
+			i++
+			n, err := strconv.Atoi(args[i])
+			if err != nil || n < 16 || n > 16<<10 {
+				return errors.New("--chunk-kb must be between 16 and 16384")
+			}
+			chunkKB = n
+		default:
 			rest = append(rest, a)
 		}
+	}
+	if trace && doPrint {
+		return errors.New("--trace only uploads; it never starts a print (leave out --print)")
+	}
+	if (noCheck || chunkKB > 0) && !trace {
+		return errors.New("--no-check and --chunk-kb are experiments; use them with --trace")
 	}
 	if len(rest) == 0 || rest[0] == "help" {
 		fmt.Fprintln(out, printerUsage)
@@ -154,9 +179,22 @@ func runPrinter(ctx context.Context, host, db string, args []string, out io.Writ
 			return err
 		}
 		open := func() (io.ReadCloser, error) { return os.Open(file) }
+		var tr *uploadTrace
+		if trace {
+			sp := p.(*sdcp.Printer)
+			sp.UploadNoCheck, sp.UploadChunk = noCheck, chunkKB<<10
+			tr = &uploadTrace{out: out}
+			sp.UploadTrace = tr.chunk
+			fmt.Fprintf(out, "tracing the upload of %s (%s), chunk %s, Check=%v - no print is started\n",
+				path.Base(file), size(info.Size()), size(int64(max(chunkKB<<10, sdcp.ChunkSize))), !noCheck)
+			fmt.Fprintln(out, "  chunk  offset      connect    send     wait    network")
+		}
 		start := time.Now()
 		last := -1
 		err = p.Upload(ctx, path.Base(file), info.Size(), open, func(sent int64) {
+			if trace {
+				return
+			}
 			if pct := int(sent * 100 / max(info.Size(), 1)); pct != last {
 				last = pct
 				fmt.Fprintf(out, "\r  uploading %s: %3d%%", path.Base(file), pct)
@@ -167,6 +205,9 @@ func runPrinter(ctx context.Context, host, db string, args []string, out io.Writ
 			return err
 		}
 		fmt.Fprintf(out, "uploaded in %s\n", time.Since(start).Round(time.Second))
+		if tr != nil {
+			tr.summary(time.Since(start))
+		}
 		if doPrint {
 			if err := p.Start(ctx, path.Base(file)); err != nil {
 				return err
@@ -231,4 +272,67 @@ func size(b int64) string {
 		return fmt.Sprintf("%.0f KB", float64(b)/(1<<10))
 	}
 	return fmt.Sprintf("%d B", b)
+}
+
+// uploadTrace prints per-chunk timings and a verdict.
+type uploadTrace struct {
+	out    io.Writer
+	chunks []sdcp.ChunkTiming
+}
+
+func (t *uploadTrace) chunk(c sdcp.ChunkTiming) {
+	t.chunks = append(t.chunks, c)
+	fmt.Fprintf(t.out, "  %5d  %-10s  %7s  %7s  %7s  %s\n", len(t.chunks), size(c.Offset),
+		ms(c.Connect), ms(c.Send), ms(c.Wait), rate(c.Bytes, c.Send))
+}
+
+func (t *uploadTrace) summary(total time.Duration) {
+	if len(t.chunks) == 0 {
+		return
+	}
+	var connect, send, wait time.Duration
+	var bytes int64
+	for _, c := range t.chunks {
+		connect, send, wait, bytes = connect+c.Connect, send+c.Send, wait+c.Wait, bytes+c.Bytes
+	}
+	n := time.Duration(len(t.chunks))
+	fmt.Fprintf(t.out, "\n%d chunks, %s in %s = %s overall\n", len(t.chunks), size(bytes), total.Round(time.Second), rate(bytes, total))
+	fmt.Fprintf(t.out, "  connecting: %s total (%s per chunk)\n", connect.Round(time.Millisecond), ms(connect/n))
+	fmt.Fprintf(t.out, "  sending:    %s total (%s per chunk) - the network, %s\n", send.Round(time.Millisecond), ms(send/n), rate(bytes, send))
+	fmt.Fprintf(t.out, "  waiting:    %s total (%s per chunk) - the printer handling a chunk\n", wait.Round(time.Millisecond), ms(wait/n))
+	fmt.Fprintln(t.out, "  (waiting also holds the last few KB of each chunk still in flight - small unless the network is very slow)")
+	if len(t.chunks) >= 10 {
+		first, last := avgWait(t.chunks[:5]), avgWait(t.chunks[len(t.chunks)-5:])
+		fmt.Fprintf(t.out, "  waiting per chunk, first 5: %s, last 5: %s\n", ms(first), ms(last))
+		if last > 2*first && last-first > 200*time.Millisecond {
+			fmt.Fprintln(t.out, "  -> the printer gets slower as the file grows (e.g. re-checking everything received so far); try --no-check")
+		}
+	}
+	switch {
+	case (send+wait)/n < 100*time.Millisecond:
+		fmt.Fprintln(t.out, "  -> fast: under 100 ms per chunk, nothing to improve here")
+	case send > 2*wait:
+		fmt.Fprintln(t.out, "  -> mostly the network: the printer takes data in slowly (WiFi signal/band, its TCP window). Compare placing the PC/router closer, or a wired PC")
+	case wait > 2*send:
+		fmt.Fprintln(t.out, "  -> mostly the printer handling each chunk (storage writes, checks): the client can't speed that up, except by avoiding per-chunk work (try --no-check)")
+	default:
+		fmt.Fprintln(t.out, "  -> network and printer both matter")
+	}
+}
+
+func avgWait(cs []sdcp.ChunkTiming) time.Duration {
+	var d time.Duration
+	for _, c := range cs {
+		d += c.Wait
+	}
+	return d / time.Duration(len(cs))
+}
+
+func ms(d time.Duration) string { return fmt.Sprintf("%dms", d.Milliseconds()) }
+
+func rate(b int64, d time.Duration) string {
+	if d <= 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%.2f MB/s", float64(b)/1e6/d.Seconds())
 }

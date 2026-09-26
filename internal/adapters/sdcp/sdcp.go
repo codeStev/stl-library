@@ -16,6 +16,7 @@ import (
 	"mime/multipart"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,6 +35,15 @@ type Printer struct {
 	DiscoveryPort int    // 3000 when 0
 	Timeout       time.Duration
 
+	// Upload experiments (see `stlib printer send --trace`). The zero
+	// values are what the protocol specifies.
+	UploadChunk   int  // bytes per chunk; ChunkSize when 0
+	UploadNoCheck bool // send Check=0 (no MD5 verification by the printer)
+	// UploadTrace, if set, receives the timing of every chunk. Tracing
+	// keeps the socket's send buffer small, so that Send measures the
+	// network and Wait the printer.
+	UploadTrace func(ChunkTiming)
+
 	mu          sync.Mutex
 	id          string
 	mainboardID string
@@ -43,9 +53,21 @@ type Printer struct {
 
 var _ app.Printer = (*Printer)(nil)
 
-// ChunkSize of uploads. The printer wants strictly sequential chunks;
-// sending them in parallel gains nothing (it is write-bound).
+// ChunkSize of uploads, as the protocol specifies. The printer wants
+// strictly sequential chunks.
 const ChunkSize = 1 << 20
+
+// ChunkTiming is where the time of one uploaded chunk went.
+type ChunkTiming struct {
+	Offset, Bytes int64
+	Connect       time.Duration // TCP connection set up
+	Send          time.Duration // request written (with a small send buffer: acknowledged by the printer)
+	Wait          time.Duration // request written until the printer's answer starts
+}
+
+// traceSendBuffer is the socket send buffer while tracing: small, so
+// "written" means "on the network", not "copied into the kernel".
+const traceSendBuffer = 32 << 10
 
 func (p *Printer) ports() (int, int) {
 	c, d := p.ControlPort, p.DiscoveryPort
@@ -377,15 +399,32 @@ func (p *Printer) Upload(ctx context.Context, name string, size int64, open func
 	cport, _ := p.ports()
 	url := fmt.Sprintf("http://%s/uploadFile/upload", net.JoinHostPort(p.Host, strconv.Itoa(cport)))
 	uuid := randomHex(32)
-	client := &http.Client{Timeout: 5 * time.Minute, Transport: &http.Transport{DisableKeepAlives: true}}
-	buf := make([]byte, ChunkSize)
+	transport := &http.Transport{DisableKeepAlives: true}
+	if p.UploadTrace != nil {
+		d := &net.Dialer{Timeout: 30 * time.Second, Control: smallSendBuffer}
+		transport.DialContext = d.DialContext
+	}
+	client := &http.Client{Timeout: 5 * time.Minute, Transport: transport}
+	chunk := ChunkSize
+	if p.UploadChunk > 0 {
+		chunk = p.UploadChunk
+	}
+	check := "1"
+	if p.UploadNoCheck {
+		check = "0"
+	}
+	buf := make([]byte, chunk)
 	var offset int64
 	for offset < size || offset == 0 {
 		n, err := io.ReadFull(r, buf)
 		if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !(errors.Is(err, io.EOF) && size == 0) {
 			return fmt.Errorf("reading %s: %w", name, err)
 		}
-		ok, msg, err := postChunk(ctx, client, url, name, uuid, sum, offset, size, buf[:n])
+		ok, msg, t, err := postChunk(ctx, client, url, name, uuid, sum, check, offset, size, buf[:n])
+		if p.UploadTrace != nil && err == nil {
+			t.Offset, t.Bytes = offset, int64(n)
+			p.UploadTrace(t)
+		}
 		if err != nil {
 			return err
 		}
@@ -401,29 +440,44 @@ func (p *Printer) Upload(ctx context.Context, name string, size int64, open func
 	return nil
 }
 
-func postChunk(ctx context.Context, client *http.Client, url, name, uuid, sum string, offset, total int64, data []byte) (bool, string, error) {
+func postChunk(ctx context.Context, client *http.Client, url, name, uuid, sum, check string, offset, total int64, data []byte) (bool, string, ChunkTiming, error) {
+	var t ChunkTiming
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
 	for _, f := range [][2]string{{"Uuid", uuid}, {"Offset", strconv.FormatInt(offset, 10)},
-		{"TotalSize", strconv.FormatInt(total, 10)}, {"Check", "1"}, {"S-File-MD5", sum}} {
+		{"TotalSize", strconv.FormatInt(total, 10)}, {"Check", check}, {"S-File-MD5", sum}} {
 		mw.WriteField(f[0], f[1])
 	}
 	fw, _ := mw.CreateFormFile("File", name)
 	fw.Write(data)
 	mw.Close()
+	// The hooks run on the transport's goroutines.
+	var mu sync.Mutex
+	var start, connected, wrote, answered time.Time
+	at := func(p *time.Time) { mu.Lock(); *p = time.Now(); mu.Unlock() }
+	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+		ConnectStart:         func(string, string) { at(&start) },
+		ConnectDone:          func(string, string, error) { at(&connected) },
+		WroteRequest:         func(httptrace.WroteRequestInfo) { at(&wrote) },
+		GotFirstResponseByte: func() { at(&answered) },
+	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &body)
 	if err != nil {
-		return false, "", err
+		return false, "", t, err
 	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	resp, err := client.Do(req)
 	if err != nil {
-		return false, "", fmt.Errorf("uploading to the printer: %w", err)
+		return false, "", t, fmt.Errorf("uploading to the printer: %w", err)
 	}
+	mu.Lock()
+	t.Connect, t.Send, t.Wait = connected.Sub(start), wrote.Sub(connected), answered.Sub(wrote)
+	mu.Unlock()
+	t.Wait = max(t.Wait, 0) // an early answer, before the body was written
 	defer resp.Body.Close()
 	b, err := io.ReadAll(resp.Body)
 	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
-		return false, "", fmt.Errorf("reading the printer's answer: %w", err)
+		return false, "", t, fmt.Errorf("reading the printer's answer: %w", err)
 	}
 	var r struct {
 		Success  bool `json:"success"`
@@ -432,7 +486,7 @@ func postChunk(ctx context.Context, client *http.Client, url, name, uuid, sum st
 		} `json:"messages"`
 	}
 	if json.Unmarshal(b, &r) != nil {
-		return false, "", fmt.Errorf("unexpected answer from the printer (HTTP %d): %.200s", resp.StatusCode, b)
+		return false, "", t, fmt.Errorf("unexpected answer from the printer (HTTP %d): %.200s", resp.StatusCode, b)
 	}
 	var msgs []string
 	for _, m := range r.Messages {
@@ -441,7 +495,7 @@ func postChunk(ctx context.Context, client *http.Client, url, name, uuid, sum st
 	if resp.StatusCode >= 400 && r.Success {
 		r.Success = false
 	}
-	return r.Success, strings.Join(msgs, "; "), nil
+	return r.Success, strings.Join(msgs, "; "), t, nil
 }
 
 func md5Of(open func() (io.ReadCloser, error)) (string, error) {

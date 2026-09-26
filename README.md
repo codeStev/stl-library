@@ -126,8 +126,12 @@ default. Then a `.ctb`/`.goo` part gets a **Print** button (upload & start,
 or upload only), and the Printer page shows live status, the transfer, the
 printer's files, and pause/resume/stop.
 
-- Uploads run in the background and are slow over WiFi (about 0.2 MB/s on a
-  Saturn 4 Ultra - a 100 MB file takes ~8 minutes); one at a time.
+- Uploads run in the background, one at a time, in the 1 MiB chunks the
+  protocol prescribes. They can be slow over WiFi (around 0.2 MB/s has been
+  seen on a Saturn 4 Ultra). `stlib printer send <file> --trace` shows
+  where the time goes - the network or the printer handling each chunk -
+  without starting a print; `--no-check` and `--chunk-kb N` try
+  non-standard variants.
 - Only sliced files print: `.chitubox` / `.lys` project files and STLs have
   to be sliced (and exported as `.ctb`/`.goo`) first. The printer refuses
   files sliced for another model or resolution - the app shows why.
@@ -138,6 +142,7 @@ The same without the web UI (the app's binary, nothing else to install):
 stlib printer --host 192.168.1.50 status
 stlib printer files [/local | / | /usb]
 stlib printer send model.ctb [--print]
+stlib printer send model.ctb --trace [--no-check] [--chunk-kb N]
 stlib printer print model.ctb
 stlib printer rm model.ctb
 stlib printer pause | resume | stop | watch
@@ -149,7 +154,8 @@ app (`--db`, default `DATA_DIR/index.db`).
 `sdcp-mock` (`go run ./cmd/sdcp-mock --http 127.0.0.1:13030 --udp
 127.0.0.1:13000`) simulates a printer for trying all of this without one;
 point the settings at it (or `--host 127.0.0.1:13030` with
-`PRINTER_DISCOVERY_PORT=13000`).
+`PRINTER_DISCOVERY_PORT=13000`). `--read-rate`, `--chunk-delay` and `--check-delay`
+simulate a slow network or a slow printer for trying out `--trace`.
 
 ### Notifications
 

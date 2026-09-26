@@ -161,3 +161,40 @@ func TestListAndDeleteFiles(t *testing.T) {
 		t.Errorf("after delete: %+v", files)
 	}
 }
+
+func TestUploadTraceSeparatesNetworkFromPrinter(t *testing.T) {
+	m, p := mockPrinter(t)
+	m.ChunkDelay = 150 * time.Millisecond // a printer slow to handle chunks
+	var chunks []ChunkTiming
+	p.UploadTrace = func(c ChunkTiming) { chunks = append(chunks, c) }
+	data := make([]byte, ChunkSize+100)
+	rand.Read(data)
+	if err := p.Upload(context.Background(), "trace.ctb", int64(len(data)), opener(data), func(int64) {}); err != nil {
+		t.Fatal(err)
+	}
+	if len(chunks) != 2 || chunks[0].Bytes != ChunkSize || chunks[1].Offset != ChunkSize {
+		t.Fatalf("chunks: %+v", chunks)
+	}
+	for _, c := range chunks {
+		if c.Wait < 150*time.Millisecond || c.Send > 100*time.Millisecond {
+			t.Errorf("printer time counted as network: %+v", c)
+		}
+	}
+}
+
+func TestUploadVariants(t *testing.T) {
+	m, p := mockPrinter(t)
+	m.CheckDelay = time.Second // would make Check=1 slow
+	p.UploadNoCheck, p.UploadChunk = true, 256<<10
+	var chunks int
+	p.UploadTrace = func(ChunkTiming) { chunks++ }
+	data := make([]byte, 3*ChunkSize)
+	rand.Read(data)
+	start := time.Now()
+	if err := p.Upload(context.Background(), "v.ctb", int64(len(data)), opener(data), func(int64) {}); err != nil {
+		t.Fatal(err)
+	}
+	if chunks != 12 || time.Since(start) > time.Second || m.Files()["/local/v.ctb"] != len(data) {
+		t.Errorf("%d chunks in %s, stored %d", chunks, time.Since(start), m.Files()["/local/v.ctb"])
+	}
+}

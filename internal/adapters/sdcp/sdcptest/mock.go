@@ -51,6 +51,14 @@ type Mock struct {
 	// Quirky sends upload responses with a Content-Length larger than the
 	// body, as the real printer does.
 	Quirky bool
+	// Simulated slowness, for trying out the upload trace: ReadRate caps
+	// how fast upload bodies are read (bytes/s, 0 = unlimited),
+	// ChunkDelay is spent on every chunk after reading it, and CheckDelay
+	// per MiB already received with Check=1 (a printer that re-checks
+	// everything so far).
+	ReadRate   int
+	ChunkDelay time.Duration
+	CheckDelay time.Duration
 
 	mu        sync.Mutex
 	files     map[string][]byte // "/local/<name>" -> content
@@ -355,6 +363,9 @@ func (m *Mock) statusMessage() any {
 // ---- upload ----
 
 func (m *Mock) serveUpload(w http.ResponseWriter, r *http.Request) {
+	if m.ReadRate > 0 {
+		r.Body = &slowReader{r: r.Body, rate: m.ReadRate}
+	}
 	if err := r.ParseMultipartForm(8 << 20); err != nil {
 		m.reply(w, 400, false, "bad form")
 		return
@@ -370,6 +381,12 @@ func (m *Mock) serveUpload(w http.ResponseWriter, r *http.Request) {
 	total, _ := strconv.ParseInt(r.FormValue("TotalSize"), 10, 64)
 	uuid := r.FormValue("Uuid")
 
+	if m.ChunkDelay > 0 {
+		time.Sleep(m.ChunkDelay)
+	}
+	if m.CheckDelay > 0 && r.FormValue("Check") == "1" {
+		time.Sleep(m.CheckDelay * time.Duration(offset>>20))
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if offset == 0 {
@@ -440,3 +457,23 @@ func (m *Mock) Run(ctx context.Context, httpAddr, udpAddr string) error {
 	m.Close()
 	return nil
 }
+
+// slowReader reads at most rate bytes per second.
+type slowReader struct {
+	r    io.ReadCloser
+	rate int
+}
+
+func (s *slowReader) Read(p []byte) (int, error) {
+	if max := s.rate / 20; len(p) > max { // 50 ms slices
+		p = p[:max]
+	}
+	start := time.Now()
+	n, err := s.r.Read(p)
+	if want := time.Duration(n) * time.Second / time.Duration(s.rate); want > time.Since(start) {
+		time.Sleep(want - time.Since(start))
+	}
+	return n, err
+}
+
+func (s *slowReader) Close() error { return s.r.Close() }
