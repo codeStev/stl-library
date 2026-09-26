@@ -5,6 +5,8 @@
 //	                                           that don't follow the convention
 //	stlib scan --db <index.db> <library-root>  bring the index up to date
 //	stlib search --db <index.db> [--creator C] [words…]
+//	stlib import --db <index.db> --source <downloads> <library-root> [--dry-run]
+//	                                           copy complete new downloads in
 //	stlib serve                                serve the API; configured by
 //	                                           LIBRARY_ROOT, DATA_DIR,
 //	                                           LISTEN_ADDR, SCAN_INTERVAL
@@ -18,6 +20,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path"
 	"sort"
 	"strings"
 	"time"
@@ -35,6 +38,7 @@ const usage = `usage:
   stlib check <library-root>
   stlib scan --db <index.db> <library-root>
   stlib search --db <index.db> [--creator <name>] [--limit N] [words...]
+  stlib import --db <index.db> --source <downloads> [--settle 1h] [--dry-run] <library-root>
   stlib serve [--root <library-root>] [--data <dir>] [--listen <addr>] [--scan-interval <duration>]
       (defaults from LIBRARY_ROOT, DATA_DIR, LISTEN_ADDR, SCAN_INTERVAL)`
 
@@ -58,6 +62,10 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	data := fs.String("data", envOr("DATA_DIR", "./data"), "data directory")
 	listen := fs.String("listen", envOr("LISTEN_ADDR", "127.0.0.1:8080"), "listen address")
 	interval := fs.String("scan-interval", envOr("SCAN_INTERVAL", "1h"), "time between library scans")
+	source := fs.String("source", os.Getenv("IMPORT_SOURCE"), "downloads folder to import from")
+	settle := fs.String("settle", envOr("IMPORT_SETTLE", "1h"), "how long a download folder must be unchanged")
+	importEvery := fs.String("import-interval", envOr("IMPORT_INTERVAL", "1h"), "time between imports")
+	dryRun := fs.Bool("dry-run", false, "only show where files would go")
 	if err := fs.Parse(args[1:]); err != nil {
 		return fmt.Errorf("%v\n%s", err, usage)
 	}
@@ -109,6 +117,30 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 			fmt.Fprintf(out, "%6d  %-40s %d variants, %d parts, %.1f MB  %s\n",
 				h.ID, h.Name, h.Variants, h.Parts, float64(h.Bytes)/1e6, h.Dir)
 		}
+	case "import":
+		if len(rest) != 1 || *db == "" || *source == "" {
+			return errors.New(usage)
+		}
+		settleFor, err := time.ParseDuration(*settle)
+		if err != nil {
+			return fmt.Errorf("--settle: %v", err)
+		}
+		lowPriority()
+		s, err := sqlite.Open(*db)
+		if err != nil {
+			return err
+		}
+		defer s.Close()
+		im := &app.Importer{Downloads: disk.Downloads{Root: *source}, Library: disk.LibraryWriter{Root: rest[0]}, Log: s, Settle: settleFor}
+		if *dryRun {
+			return printPreview(ctx, out, im)
+		}
+		sum, err := im.Run(ctx)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "imported %d folders (%d files); %d waiting, %d failed; %d recorded as already there\n",
+			sum.Imported, sum.Files, sum.Waiting, sum.Failed, sum.Baselined)
 	case "serve":
 		if *root == "" {
 			return errors.New("serve: no library root (set LIBRARY_ROOT or --root)\n" + usage)
@@ -118,9 +150,54 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 			return fmt.Errorf("serve: scan interval %q: must be a duration of at least 1m", *interval)
 		}
 		lowPriority()
-		return serve(ctx, *root, *data, *listen, every)
+		var imp *importConfig
+		if *source != "" {
+			settleFor, err := time.ParseDuration(*settle)
+			if err != nil {
+				return fmt.Errorf("IMPORT_SETTLE: %v", err)
+			}
+			importFor, err := time.ParseDuration(*importEvery)
+			if err != nil || importFor < time.Minute {
+				return fmt.Errorf("IMPORT_INTERVAL %q: must be a duration of at least 1m", *importEvery)
+			}
+			imp = &importConfig{source: *source, settle: settleFor, every: importFor}
+		}
+		return serve(ctx, *root, *data, *listen, every, imp)
 	default:
 		return errors.New(usage)
+	}
+	return nil
+}
+
+func printPreview(ctx context.Context, out io.Writer, im *app.Importer) error {
+	previews, err := im.Preview(ctx)
+	if err != nil {
+		return err
+	}
+	for _, p := range previews {
+		state := "complete"
+		if !p.Settled {
+			state = "waiting: " + p.Why
+		}
+		fmt.Fprintf(out, "== %s  ->  %s  (%s)\n", p.Source, p.Target, state)
+		if p.Err != nil {
+			fmt.Fprintf(out, "   cannot read: %v\n", p.Err)
+			continue
+		}
+		// Group files by target folder.
+		dirs := map[string]int{}
+		var order []string
+		for _, pl := range p.Placements {
+			d := path.Dir(pl.Target)
+			if dirs[d] == 0 {
+				order = append(order, d)
+			}
+			dirs[d]++
+		}
+		sort.Strings(order)
+		for _, d := range order {
+			fmt.Fprintf(out, "   %4d  %s\n", dirs[d], strings.TrimPrefix(d, p.Target))
+		}
 	}
 	return nil
 }

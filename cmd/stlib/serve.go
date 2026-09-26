@@ -19,9 +19,16 @@ import (
 	"github.com/codeStev/stl-library/internal/app"
 )
 
-// serve runs the API and rescans the library every interval, until
-// SIGINT/SIGTERM.
-func serve(ctx context.Context, root, data, listen string, every time.Duration) error {
+// importConfig turns on importing from a downloads folder.
+type importConfig struct {
+	source string
+	settle time.Duration
+	every  time.Duration
+}
+
+// serve runs the API and rescans the library every interval (and imports
+// new downloads, if configured), until SIGINT/SIGTERM.
+func serve(ctx context.Context, root, data, listen string, every time.Duration, imp *importConfig) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := os.MkdirAll(data, 0o755); err != nil {
@@ -47,7 +54,14 @@ func serve(ctx context.Context, root, data, listen string, every time.Duration) 
 		debug.SetMemoryLimit(150 << 20)
 	}
 
-	go scanLoop(ctx, disk.Lister{Root: root}, store, thumbs, every)
+	rescan := make(chan struct{}, 1)
+	var importer *app.Importer
+	if imp != nil {
+		importer = &app.Importer{Downloads: disk.Downloads{Root: imp.source}, Library: disk.LibraryWriter{Root: root}, Log: store, Settle: imp.settle}
+		api.Importer = importer
+		go importLoop(ctx, importer, imp.every, rescan)
+	}
+	go scanLoop(ctx, disk.Lister{Root: root}, store, thumbs, every, rescan)
 
 	errc := make(chan error, 1)
 	go func() {
@@ -67,7 +81,36 @@ func serve(ctx context.Context, root, data, listen string, every time.Duration) 
 	return nil
 }
 
-func scanLoop(ctx context.Context, l app.Lister, s app.Store, thumbs *app.Thumbs, every time.Duration) {
+// importLoop imports new downloads every interval; when something was
+// imported it asks for a rescan.
+func importLoop(ctx context.Context, im *app.Importer, every time.Duration, rescan chan<- struct{}) {
+	for {
+		start := time.Now()
+		sum, err := im.Run(ctx)
+		switch {
+		case err != nil && ctx.Err() != nil:
+			return
+		case err != nil:
+			slog.Error("import failed", "err", err)
+		case sum.Imported+sum.Failed+sum.Baselined > 0 || sum.Files > 0:
+			slog.Info("import done", "took", time.Since(start).Round(time.Second), "imported", sum.Imported, "files", sum.Files,
+				"waiting", sum.Waiting, "failed", sum.Failed, "recorded as already there", sum.Baselined)
+		}
+		if sum.Files > 0 {
+			select {
+			case rescan <- struct{}{}:
+			default:
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(every):
+		}
+	}
+}
+
+func scanLoop(ctx context.Context, l app.Lister, s app.Store, thumbs *app.Thumbs, every time.Duration, rescan <-chan struct{}) {
 	for {
 		start := time.Now()
 		st, err := app.Scan(ctx, l, s)
@@ -94,6 +137,7 @@ func scanLoop(ctx context.Context, l app.Lister, s app.Store, thumbs *app.Thumbs
 		case <-ctx.Done():
 			return
 		case <-time.After(every):
+		case <-rescan:
 		}
 	}
 }

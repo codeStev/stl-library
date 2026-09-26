@@ -318,3 +318,53 @@ func TestWritesNeedJSON(t *testing.T) {
 		t.Errorf("unknown variant: %d", code)
 	}
 }
+
+func TestHideRelabelAndImportsDisabled(t *testing.T) {
+	srv := server(t)
+	var hits []modelSummary
+	getJSON(t, srv, "/api/models?q=bell", &hits)
+	id := itoa(hits[0].ID)
+	if code, _ := send(t, srv, "PUT", "/api/models/"+id+"/hidden", `{"hidden":true}`); code != 204 {
+		t.Fatalf("hide: %d", code)
+	}
+	getJSON(t, srv, "/api/models?q=bell", &hits)
+	if len(hits) != 0 {
+		t.Errorf("hidden model listed: %+v", hits)
+	}
+	getJSON(t, srv, "/api/models?q=bell&hidden=yes", &hits)
+	if len(hits) != 1 || !hits[0].Hidden {
+		t.Fatalf("with hidden: %+v", hits)
+	}
+	var m modelDetail
+	getJSON(t, srv, "/api/models/"+id, &m)
+	vid := itoa(m.Variants[0].ID)
+	if code, body := send(t, srv, "PUT", "/api/variants/"+vid+"/label", `{"dims":{"scale":"75mm","supports":"Supported"},"option":"Helmet"}`); code != 204 {
+		t.Fatalf("relabel: %d %s", code, body)
+	}
+	getJSON(t, srv, "/api/models/"+id, &m)
+	var v variant
+	for _, x := range m.Variants {
+		if itoa(x.ID) == vid {
+			v = x
+		}
+	}
+	if v.Label != "75mm · Supported" || v.Option != "Helmet" || !v.Relabeled {
+		t.Errorf("relabeled variant: %+v", v)
+	}
+	if code, _ := send(t, srv, "PUT", "/api/variants/"+vid+"/label", `{"dims":{"supports":"presupported"}}`); code != 400 {
+		t.Errorf("invalid label: %d", code)
+	}
+	if code, _ := send(t, srv, "DELETE", "/api/variants/"+vid+"/label", ""); code != 204 {
+		t.Errorf("reset: %d", code)
+	}
+	var imp struct {
+		Enabled bool `json:"enabled"`
+	}
+	getJSON(t, srv, "/api/imports", &imp)
+	if imp.Enabled {
+		t.Error("import enabled without a source")
+	}
+	if code, _ := send(t, srv, "POST", "/api/imports/request", `{"source":"x"}`); code != 409 {
+		t.Errorf("request without importer: %d", code)
+	}
+}

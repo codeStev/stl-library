@@ -24,6 +24,8 @@ type API struct {
 	Files  app.Files
 	Thumbs *app.Thumbs
 	User   app.UserData
+	// Importer is set when importing from a downloads folder is on.
+	Importer *app.Importer
 }
 
 // Handler routes /api/… requests.
@@ -39,8 +41,13 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /api/images/{id}", a.image)
 	mux.HandleFunc("GET /api/images/{id}/thumb", a.thumb)
 	mux.HandleFunc("GET /api/tags", a.tags)
+	mux.HandleFunc("GET /api/imports", a.imports)
+	mux.HandleFunc("POST /api/imports/request", a.requestImport)
 	mux.HandleFunc("PUT /api/models/{id}/tags", a.setTags)
 	mux.HandleFunc("PUT /api/models/{id}/name", a.setName)
+	mux.HandleFunc("PUT /api/models/{id}/hidden", a.setHidden)
+	mux.HandleFunc("PUT /api/variants/{id}/label", a.setLabel)
+	mux.HandleFunc("DELETE /api/variants/{id}/label", a.resetLabel)
 	mux.HandleFunc("POST /api/variants/{id}/prints", a.addPrint)
 	mux.HandleFunc("DELETE /api/prints/{id}", a.deletePrint)
 	mux.HandleFunc("GET /api/queue", a.queue)
@@ -66,6 +73,7 @@ type modelSummary struct {
 	DisplayName string   `json:"displayName,omitempty"`
 	Tags        []string `json:"tags"`
 	Prints      int      `json:"prints"`
+	Hidden      bool     `json:"hidden,omitempty"`
 }
 
 type fileRef struct {
@@ -82,6 +90,8 @@ type variant struct {
 	Parts  []fileRef         `json:"parts"`
 	Prints []print           `json:"prints"`
 	Queued bool              `json:"queued"`
+	// Relabeled: dims/option come from a correction, not the folders.
+	Relabeled bool `json:"relabeled,omitempty"`
 }
 
 type print struct {
@@ -110,7 +120,7 @@ func summary(m app.ModelSummary) modelSummary {
 		tags = []string{}
 	}
 	return modelSummary{m.ID, m.Creator, m.Release, m.Category, m.Name, m.Dir, m.Variants, m.Parts, m.Bytes, m.Cover,
-		m.Cover != 0 || m.Renderable, m.DisplayName, tags, m.Prints}
+		m.Cover != 0 || m.Renderable, m.DisplayName, tags, m.Prints, m.Hidden}
 }
 
 func refs(fs []app.FileRef) []fileRef {
@@ -142,7 +152,8 @@ func (a *API) searchModels(w http.ResponseWriter, r *http.Request) {
 	if offset < 0 {
 		offset = 0
 	}
-	query := app.Query{Text: q.Get("q"), Creator: q.Get("creator"), Tag: q.Get("tag"), Limit: limit, Offset: offset}
+	query := app.Query{Text: q.Get("q"), Creator: q.Get("creator"), Tag: q.Get("tag"), Hidden: q.Get("hidden") == "yes",
+		Limit: limit, Offset: offset}
 	switch q.Get("printed") {
 	case "yes":
 		t := true
@@ -178,7 +189,7 @@ func (a *API) model(w http.ResponseWriter, r *http.Request) {
 		out.Variants = append(out.Variants, variant{
 			ID: v.ID, Label: strings.Join(convention.CanonicalSegments(v.Dims), " · "),
 			Dims: dims(v.Dims), Option: v.Option, Parts: refs(v.Parts),
-			Prints: prints(v.Prints), Queued: v.Queued,
+			Prints: prints(v.Prints), Queued: v.Queued, Relabeled: v.Relabeled,
 		})
 	}
 	writeJSON(w, out)
@@ -328,6 +339,52 @@ func (a *API) setName(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (a *API) setHidden(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	var body struct {
+		Hidden bool `json:"hidden"`
+	}
+	if !ok || !readJSON(w, r, &body) {
+		return
+	}
+	if err := a.User.SetHidden(r.Context(), id, body.Hidden); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) setLabel(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	var body struct {
+		Dims   map[string]string `json:"dims"`
+		Option string            `json:"option"`
+	}
+	if !ok || !readJSON(w, r, &body) {
+		return
+	}
+	d := body.Dims
+	l := app.VariantLabel{Option: body.Option, Dims: convention.Dims{Scale: d["scale"], Supports: d["supports"],
+		Density: d["density"], Format: d["format"], Fill: d["fill"], Split: d["split"], Tech: d["tech"], Extra: d["extra"]}}
+	if err := a.User.Relabel(r.Context(), id, l); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) resetLabel(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	if err := a.User.ResetLabel(r.Context(), id); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (a *API) addPrint(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(w, r)
 	var body struct {
@@ -419,6 +476,50 @@ func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 		return false
 	}
 	return true
+}
+
+func (a *API) imports(w http.ResponseWriter, r *http.Request) {
+	type record struct {
+		Source  string `json:"source"`
+		State   string `json:"state"`
+		Target  string `json:"target,omitempty"`
+		Files   int    `json:"files"`
+		Message string `json:"message,omitempty"`
+		Updated int64  `json:"updated"`
+	}
+	out := struct {
+		Enabled bool     `json:"enabled"`
+		Records []record `json:"records"`
+	}{Enabled: a.Importer != nil, Records: []record{}}
+	if a.Importer != nil {
+		recs, err := a.Importer.Log.ImportRecords(r.Context())
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		for _, rec := range recs {
+			out.Records = append(out.Records, record{rec.Source, rec.State, rec.Target, rec.Files, rec.Message, rec.UpdatedUnix})
+		}
+	}
+	writeJSON(w, out)
+}
+
+func (a *API) requestImport(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Source string `json:"source"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if a.Importer == nil {
+		http.Error(w, "importing is not enabled", http.StatusConflict)
+		return
+	}
+	if err := a.Importer.Request(r.Context(), body.Source); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *API) serveFile(w http.ResponseWriter, r *http.Request, lookup func(int64) (*app.FileRef, error), download bool) {
