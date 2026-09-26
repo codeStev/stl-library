@@ -1,0 +1,168 @@
+package httpapi
+
+import (
+	"archive/zip"
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/codeStev/stl-library/internal/adapters/disk"
+	"github.com/codeStev/stl-library/internal/adapters/sqlite"
+	"github.com/codeStev/stl-library/internal/app"
+)
+
+// server builds a small library on disk, scans it and serves the API.
+func server(t *testing.T) *httptest.Server {
+	t.Helper()
+	root := t.TempDir()
+	for p, content := range map[string]string{
+		"Loot Studios/Abyssal Haze/Enemies/Bell Head/32mm/Supported Lychee/bell.lys": "LYS",
+		"Loot Studios/Abyssal Haze/Enemies/Bell Head/32mm/Supported Lychee/base.lys": "BASE",
+		"Loot Studios/Abyssal Haze/Enemies/Bell Head/32mm/No Supports/bell.stl":      "STL",
+		"Loot Studios/Abyssal Haze/Enemies/Bell Head/cover.jpg":                      "JPG",
+		"Artisan Guild/Noble Alfar/Kövön the Wise/k.stl":                             "K",
+		"Lord of the Print/Unchained/Araki/Presupported/a.stl":                       "A",
+	} {
+		full := filepath.Join(root, p)
+		os.MkdirAll(filepath.Dir(full), 0o755)
+		os.WriteFile(full, []byte(content), 0o644)
+	}
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "index.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	if _, err := app.Scan(context.Background(), disk.Lister{Root: root}, store); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer((&API{Store: store, Files: disk.Files{Root: root}}).Handler())
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func get(t *testing.T, srv *httptest.Server, path string) (*http.Response, []byte) {
+	t.Helper()
+	resp, err := http.Get(srv.URL + path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return resp, body
+}
+
+func getJSON(t *testing.T, srv *httptest.Server, path string, v any) {
+	t.Helper()
+	resp, body := get(t, srv, path)
+	if resp.StatusCode != 200 {
+		t.Fatalf("%s: %d %s", path, resp.StatusCode, body)
+	}
+	if err := json.Unmarshal(body, v); err != nil {
+		t.Fatalf("%s: %v in %s", path, err, body)
+	}
+}
+
+func TestSearchThenModelDetail(t *testing.T) {
+	srv := server(t)
+	var hits []modelSummary
+	getJSON(t, srv, "/api/models?q=bell", &hits)
+	if len(hits) != 1 || hits[0].Name != "Bell Head" || hits[0].Variants != 2 {
+		t.Fatalf("hits: %+v", hits)
+	}
+	var m modelDetail
+	getJSON(t, srv, "/api/models/"+itoa(hits[0].ID), &m)
+	if len(m.Variants) != 2 || len(m.Images) != 1 || m.Images[0].Name != "cover.jpg" {
+		t.Fatalf("detail: %+v", m)
+	}
+	v := m.Variants[1]
+	if v.Label != "32mm · Supported Lychee" || v.Dims["format"] != "Lychee" || len(v.Parts) != 2 {
+		t.Errorf("variant: %+v", v)
+	}
+	var all []modelSummary
+	getJSON(t, srv, "/api/models?creator=Artisan+Guild", &all)
+	if len(all) != 1 || all[0].Name != "Kövön the Wise" {
+		t.Errorf("creator filter: %+v", all)
+	}
+}
+
+func TestCreatorsAndIssues(t *testing.T) {
+	srv := server(t)
+	var cs []struct {
+		Name   string `json:"name"`
+		Models int    `json:"models"`
+	}
+	getJSON(t, srv, "/api/creators", &cs)
+	if len(cs) != 2 {
+		t.Errorf("creators: %+v", cs)
+	}
+	var is []struct{ Dir, Reason string }
+	getJSON(t, srv, "/api/issues", &is)
+	if len(is) != 1 || !strings.Contains(is[0].Reason, "Presupported") {
+		t.Errorf("issues: %+v", is)
+	}
+}
+
+func TestVariantZipAndFiles(t *testing.T) {
+	srv := server(t)
+	var hits []modelSummary
+	getJSON(t, srv, "/api/models?q=bell", &hits)
+	var m modelDetail
+	getJSON(t, srv, "/api/models/"+itoa(hits[0].ID), &m)
+	lychee := m.Variants[1]
+
+	resp, body := get(t, srv, "/api/variants/"+itoa(lychee.ID)+"/zip")
+	if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "application/zip" {
+		t.Fatalf("zip: %d %v", resp.StatusCode, resp.Header)
+	}
+	if cd := resp.Header.Get("Content-Disposition"); !strings.Contains(cd, `filename="Bell Head - 32mm Supported Lychee.zip"`) {
+		t.Errorf("disposition %q", cd)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil || len(zr.File) != 2 {
+		t.Fatalf("zip: %v %d files", err, len(zr.File))
+	}
+
+	resp, body = get(t, srv, "/api/images/"+itoa(m.Images[0].ID))
+	if resp.StatusCode != 200 || string(body) != "JPG" || resp.Header.Get("Content-Type") != "image/jpeg" {
+		t.Errorf("image: %d %q %v", resp.StatusCode, body, resp.Header.Get("Content-Type"))
+	}
+	resp, body = get(t, srv, "/api/parts/"+itoa(lychee.Parts[0].ID))
+	if resp.StatusCode != 200 || !strings.Contains(resp.Header.Get("Content-Disposition"), "attachment") || len(body) == 0 {
+		t.Errorf("part: %d %v", resp.StatusCode, resp.Header)
+	}
+}
+
+func TestUnknownAndBadIDs(t *testing.T) {
+	srv := server(t)
+	for path, want := range map[string]int{
+		"/api/models/999":       404,
+		"/api/models/abc":       400,
+		"/api/models/-1":        400,
+		"/api/variants/999/zip": 404,
+		"/api/images/999":       404,
+		"/api/parts/0":          400,
+		"/api/nothing":          404,
+	} {
+		if resp, _ := get(t, srv, path); resp.StatusCode != want {
+			t.Errorf("%s: %d, want %d", path, resp.StatusCode, want)
+		}
+	}
+}
+
+func TestAttachmentHeaderSurvivesNonASCII(t *testing.T) {
+	got := attachment(`Kövön "the" Wise.zip`)
+	want := `attachment; filename="K_v_n _the_ Wise.zip"; filename*=UTF-8''K%C3%B6v%C3%B6n%20%22the%22%20Wise.zip`
+	if got != want {
+		t.Errorf("\n got %s\nwant %s", got, want)
+	}
+}
+
+func itoa(n int64) string { return strconv.FormatInt(n, 10) }
