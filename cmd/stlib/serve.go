@@ -42,7 +42,11 @@ func serve(ctx context.Context, root, data, listen string, every time.Duration, 
 
 	files := disk.Files{Root: root}
 	thumbs := app.NewThumbs(store, files, disk.ThumbCache{Dir: filepath.Join(data, "thumbs")})
-	api := &httpapi.API{Store: store, Files: files, Thumbs: thumbs, User: app.UserData{Store: store}}
+	printing := &app.Printing{Store: store, Files: files, Settings: store, Connect: newPrinter}
+	if addr := os.Getenv("PRINTER_ADDR"); addr != "" {
+		printing.Default = parsePrinterAddr(addr)
+	}
+	api := &httpapi.API{Store: store, Files: files, Thumbs: thumbs, User: app.UserData{Store: store}, Printing: printing}
 	mux := http.NewServeMux()
 	mux.Handle("/api/", api.Handler())
 	mux.Handle("/", web.Handler())

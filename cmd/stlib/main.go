@@ -7,6 +7,8 @@
 //	stlib search --db <index.db> [--creator C] [words…]
 //	stlib import --db <index.db> --source <downloads> <library-root> [--dry-run]
 //	                                           copy complete new downloads in
+//	stlib printer [--host addr] <command>      control a network resin printer
+//	                                           (status, files, send, print, rm, …)
 //	stlib serve                                serve the API; configured by
 //	                                           LIBRARY_ROOT, DATA_DIR,
 //	                                           LISTEN_ADDR, SCAN_INTERVAL
@@ -39,6 +41,7 @@ const usage = `usage:
   stlib scan --db <index.db> <library-root>
   stlib search --db <index.db> [--creator <name>] [--limit N] [words...]
   stlib import --db <index.db> --source <downloads> [--settle 1h] [--dry-run] <library-root>
+  stlib printer [--host <addr>[:<port>]] <status|files|send|print|rm|pause|resume|stop|watch> …
   stlib serve [--root <library-root>] [--data <dir>] [--listen <addr>] [--scan-interval <duration>]
       (defaults from LIBRARY_ROOT, DATA_DIR, LISTEN_ADDR, SCAN_INTERVAL)`
 
@@ -66,6 +69,7 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	settle := fs.String("settle", envOr("IMPORT_SETTLE", "1h"), "how long a download folder must be unchanged")
 	importEvery := fs.String("import-interval", envOr("IMPORT_INTERVAL", "1h"), "time between imports")
 	dryRun := fs.Bool("dry-run", false, "only show where files would go")
+	host := fs.String("host", "", "printer address (printer command)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return fmt.Errorf("%v\n%s", err, usage)
 	}
@@ -73,6 +77,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	switch args[0] {
 	case "version":
 		fmt.Fprintln(out, version)
+	case "printer":
+		return runPrinter(ctx, *host, *db, rest, out)
 	case "check":
 		if len(rest) != 1 {
 			return errors.New(usage)
