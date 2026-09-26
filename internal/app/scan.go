@@ -20,6 +20,7 @@ type Store interface {
 	Variant(ctx context.Context, id int64) (*VariantDetail, error)
 	Image(ctx context.Context, id int64) (*FileRef, error)
 	Part(ctx context.Context, id int64) (*FileRef, error)
+	PartVariant(ctx context.Context, partID int64) (int64, error)
 
 	// User data, keyed by folder so it survives rescans.
 	SetTags(ctx context.Context, modelID int64, tags []string) error

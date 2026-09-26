@@ -21,6 +21,10 @@ const module = "github.com/codeStev/stl-library/"
 // ioPackages touch the outside world.
 var ioPackages = []string{"os", "io/fs", "path/filepath", "database/sql", "encoding/csv", "net/", "log", "modernc.org/", "golang.org/x/sys"}
 
+// pureParsers are packages under a forbidden prefix that only parse
+// strings and never touch the outside world.
+var pureParsers = map[string]bool{"net/url": true, "net/mail": true}
+
 var rules = []struct {
 	dir       string
 	forbidden []string
@@ -43,6 +47,9 @@ func TestLayersOnlyDependInward(t *testing.T) {
 			}
 			for _, imp := range f.Imports {
 				path, _ := strconv.Unquote(imp.Path.Value)
+				if pureParsers[path] {
+					continue
+				}
 				for _, bad := range r.forbidden {
 					if path == strings.TrimSuffix(bad, "/") || strings.HasPrefix(path, strings.TrimSuffix(bad, "/")+"/") {
 						t.Errorf("%s imports %s - not allowed there", p, path)

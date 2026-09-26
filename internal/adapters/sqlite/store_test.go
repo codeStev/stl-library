@@ -441,3 +441,21 @@ func TestPrinterSettings(t *testing.T) {
 		t.Errorf("got %+v %v %v", got, ok, err)
 	}
 }
+
+func TestNotificationSettingsAndPartVariant(t *testing.T) {
+	s, ctx := open(t), context.Background()
+	ns, err := s.NotificationSettings(ctx)
+	if err != nil || ns.Events == nil || ns.Ntfy.URL != "" {
+		t.Errorf("defaults: %+v %v", ns, err)
+	}
+	s.SaveNotificationSettings(ctx, app.NotificationSettings{Ntfy: app.NtfySettings{URL: "https://ntfy.sh/x", Token: "v1:abc"}, Events: map[string]bool{app.EventPrintDone: true}})
+	if ns, _ = s.NotificationSettings(ctx); ns.Ntfy.Token != "v1:abc" || !ns.Events[app.EventPrintDone] {
+		t.Errorf("saved: %+v", ns)
+	}
+	sync(s, libraryV1...)
+	hits, _ := s.Search(ctx, app.Query{Text: "bell", Limit: 1})
+	m, _ := s.Model(ctx, hits[0].ID)
+	if v, err := s.PartVariant(ctx, m.Variants[0].Parts[0].ID); err != nil || v != m.Variants[0].ID {
+		t.Errorf("part variant: %d %v", v, err)
+	}
+}

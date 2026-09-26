@@ -525,6 +525,13 @@ func (s *Store) Part(ctx context.Context, id int64) (*app.FileRef, error) {
 	return &f, nil
 }
 
+// PartVariant returns the variant a part belongs to.
+func (s *Store) PartVariant(ctx context.Context, partID int64) (int64, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx, `SELECT variant_id FROM part WHERE id = ?`, partID).Scan(&id)
+	return id, notFound(err)
+}
+
 // Creators lists every creator with its number of models.
 func (s *Store) Creators(ctx context.Context) ([]app.CreatorCount, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT creator, count(*) FROM model GROUP BY creator ORDER BY creator`)
@@ -823,5 +830,38 @@ func (s *Store) SavePrinterSettings(ctx context.Context, ps app.PrinterSettings)
 		return err
 	}
 	_, err = s.db.ExecContext(ctx, `INSERT INTO meta (key, value) VALUES ('printer', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, string(b))
+	return err
+}
+
+var _ app.NotificationStore = (*Store)(nil)
+
+// NotificationSettings returns the saved notification settings (secrets
+// still sealed); all off when none were saved.
+func (s *Store) NotificationSettings(ctx context.Context) (app.NotificationSettings, error) {
+	var v string
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = 'notifications'`).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return app.NotificationSettings{Events: map[string]bool{}}, nil
+	}
+	if err != nil {
+		return app.NotificationSettings{}, err
+	}
+	var ns app.NotificationSettings
+	if err := json.Unmarshal([]byte(v), &ns); err != nil {
+		return ns, fmt.Errorf("saved notification settings: %w", err)
+	}
+	if ns.Events == nil {
+		ns.Events = map[string]bool{}
+	}
+	return ns, nil
+}
+
+// SaveNotificationSettings saves the notification settings.
+func (s *Store) SaveNotificationSettings(ctx context.Context, ns app.NotificationSettings) error {
+	b, err := json.Marshal(ns)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO meta (key, value) VALUES ('notifications', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, string(b))
 	return err
 }

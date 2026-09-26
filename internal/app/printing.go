@@ -82,6 +82,17 @@ type Printing struct {
 	cancel   context.CancelFunc
 	current  Printer
 	currentS PrinterSettings
+	started  map[string]int64 // file on the printer -> part it was started from
+}
+
+// forgetStarted returns (and forgets) the part a print of file was started
+// from by this app.
+func (p *Printing) forgetStarted(file string) (int64, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	id, ok := p.started[file]
+	delete(p.started, file)
+	return id, ok
 }
 
 // Config returns the settings in effect and where they come from
@@ -218,6 +229,10 @@ func (p *Printing) run(ctx context.Context, pr Printer, part FileRef, t *Transfe
 		t.State, t.Error = "failed", err.Error()
 	case t.Start:
 		t.State = "printing"
+		if p.started == nil {
+			p.started = map[string]int64{}
+		}
+		p.started[t.File] = t.PartID
 	default:
 		t.State = "done"
 	}
