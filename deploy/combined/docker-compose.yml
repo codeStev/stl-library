@@ -16,6 +16,8 @@ services:
       # the override file (docker-compose.import.yml), see the README.
       IMPORT_INTERVAL: ${IMPORT_INTERVAL:-1h}
       IMPORT_SETTLE: ${IMPORT_SETTLE:-1h}
+      # Optional default printer; the Settings page can set it instead.
+      PRINTER_ADDR: ${PRINTER_ADDR:-}
     ports:
       - "${APP_BIND_HOST:-127.0.0.1}:${APP_PORT:-8080}:8080"
     volumes:

@@ -28,6 +28,10 @@ Features:
 - "Not following the convention": the folders the app can't read, and why.
 - Corrections without touching the files: hide a model, fix a variant's
   label (e.g. a folder the app read as "No Supports" that is supported).
+- **Print on a network resin printer** (optional, ELEGOO SDCP printers such
+  as the Saturn 4 Ultra): send a sliced `.ctb`/`.goo` part to the printer
+  and start it, watch progress, pause/resume/stop, manage the files on the
+  printer - from the web UI or with `stlib printer` on the command line.
 - **Import from a downloads folder** (optional): new, fully downloaded
   models are copied into the library in the convention's layout, zip
   archives unpacked.
@@ -86,7 +90,7 @@ Hexagonal. The dependency rule is enforced by `internal/architecture_test.go`:
 | convention (public, pure) | `convention` | standard library only, no I/O |
 | domain (pure) | `internal/core/library` (reads a file listing into models, variants, parts and issues), `internal/core/thumb` (image thumbnails), `internal/core/render` (streaming STL rasterizer) | convention |
 | use cases + ports | `internal/app` (`Check`, `Scan`, `Search`, `VariantZip`, `Thumbs`, `UserData`; ports `Lister`, `Store`, `Files`, `ThumbCache`) | core |
-| adapters | `internal/adapters/disk` (read-only listing and file access, thumbnail cache), `internal/adapters/sqlite` (index, FTS5, user data), `internal/adapters/httpapi` (JSON API, driving), `internal/adapters/web` (embedded UI) | app, core |
+| adapters | `internal/adapters/sdcp` (ELEGOO printers; `sdcptest` is a mock printer), `internal/adapters/disk` (read-only listing and file access, thumbnail cache), `internal/adapters/sqlite` (index, FTS5, user data), `internal/adapters/httpapi` (JSON API, driving), `internal/adapters/web` (embedded UI) | app, core |
 | driving adapter | `cmd/stlib` | everything, wiring only |
 
 ## Usage
@@ -141,6 +145,39 @@ With `IMPORT_SOURCE` set, `stlib serve` looks at that folder every
 `stlib import --db index.db --source <downloads> --dry-run <library>` shows
 where every file would go without writing anything.
 
+### Printing
+
+Configure the printer on the Settings page (address, and the ports if they
+differ from 3030/3000), or with `PRINTER_ADDR=<host>[:<port>]` as the
+default. Then a `.ctb`/`.goo` part gets a **Print** button (upload & start,
+or upload only), and the Printer page shows live status, the transfer, the
+printer's files, and pause/resume/stop.
+
+- Uploads run in the background and are slow over WiFi (about 0.2 MB/s on a
+  Saturn 4 Ultra - a 100 MB file takes ~8 minutes); one at a time.
+- Only sliced files print: `.chitubox` / `.lys` project files and STLs have
+  to be sliced (and exported as `.ctb`/`.goo`) first. The printer refuses
+  files sliced for another model or resolution - the app shows why.
+
+The same without the web UI (the app's binary, nothing else to install):
+
+```
+stlib printer --host 192.168.2.35 status
+stlib printer files [/local | / | /usb]
+stlib printer send model.ctb [--print]
+stlib printer print model.ctb
+stlib printer rm model.ctb
+stlib printer pause | resume | stop | watch
+```
+
+The printer is `--host`, else `PRINTER_ADDR`, else the address saved in the
+app (`--db`, default `DATA_DIR/index.db`).
+
+`sdcp-mock` (`go run ./cmd/sdcp-mock --http 127.0.0.1:13030 --udp
+127.0.0.1:13000`) simulates a printer for trying all of this without one;
+point the settings at it (or `--host 127.0.0.1:13030` with
+`PRINTER_DISCOVERY_PORT=13000`).
+
 ### Server
 
 ```
@@ -154,6 +191,8 @@ LIBRARY_ROOT=/path/to/library DATA_DIR=./data stlib serve
 | `LISTEN_ADDR` | `127.0.0.1:8080` | |
 | `SCAN_INTERVAL` | `1h` | time between rescans (at least `1m`); the first scan starts right away |
 | `IMPORT_SOURCE` | (off) | downloads folder to import from; the library must then be writable |
+| `PRINTER_ADDR` | (off) | default printer address `<host>[:<control port>]`; the Settings page overrides it |
+| `PRINTER_DISCOVERY_PORT` | `3000` | the printer's discovery port, if it differs |
 | `IMPORT_INTERVAL` | `1h` | time between imports (at least `1m`) |
 | `IMPORT_SETTLE` | `1h` | how long a download folder must be unchanged to count as complete |
 
@@ -177,6 +216,11 @@ API:
 | `GET /api/queue`, `PUT`/`DELETE /api/variants/{id}/queue` | the print queue; add / remove a variant |
 | `PUT /api/models/{id}/hidden` | hide / show a model (`{"hidden": true}`) |
 | `PUT`/`DELETE /api/variants/{id}/label` | correct a variant's dimensions and option (`{"dims": {...}, "option": "..."}`); back to the folder names |
+| `GET /api/printer` | printer status, current job and transfer |
+| `POST /api/parts/{id}/print` | send a `.ctb`/`.goo` part to the printer (`{"start": true}` also starts it) |
+| `POST /api/printer/{pause,resume,stop}`, `DELETE /api/printer/transfer` | control the print; cancel an upload |
+| `GET /api/printer/files?dir=`, `POST /api/printer/files/print`, `POST /api/printer/files/delete` | the printer's storage |
+| `GET`/`PUT /api/settings/printer`, `POST /api/settings/printer/test` | printer settings; test settings without saving |
 | `GET /api/imports`, `POST /api/imports/request` | what the importer did with each download folder; import one (`{"source": "..."}`) |
 
 Search takes `q`, `creator`, `tag`, `printed=yes|no`, `hidden=yes` (include hidden models), `limit`, `offset`.
