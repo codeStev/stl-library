@@ -13,8 +13,9 @@ library to follow the folder convention below, reads conforming folders
 exactly, and lists folders that don't conform so you can fix them yourself.
 
 Status: in development. What exists so far: the definition of the
-convention (`convention/`), and `stlib check`, which reads a library and
-reports its models and every folder that doesn't follow the convention.
+convention (`convention/`), `stlib check` (reads a library, reports its
+models and every folder that doesn't follow the convention), and a SQLite
+index with full-text search (`stlib scan`, `stlib search`).
 
 ## Folder convention
 
@@ -68,8 +69,8 @@ Hexagonal. The dependency rule is enforced by `internal/architecture_test.go`:
 |---|---|---|
 | convention (public, pure) | `convention` | standard library only, no I/O |
 | domain (pure) | `internal/core/library` - reads a file listing into models, variants, parts and issues | convention |
-| use cases + ports | `internal/app` (`Check`; port `Lister`) | core |
-| adapters | `internal/adapters/disk` (read-only listing) | app, core |
+| use cases + ports | `internal/app` (`Check`, `Scan`, `Search`; ports `Lister`, `Store`) | core |
+| adapters | `internal/adapters/disk` (read-only listing), `internal/adapters/sqlite` (index, FTS5) | app, core |
 | driving adapter | `cmd/stlib` | everything, wiring only |
 
 ## Usage
@@ -81,6 +82,17 @@ stlib check /path/to/library
 Prints how many models, variants and part files were found per creator,
 then every folder that doesn't follow the convention and why. Runs at the
 lowest CPU and I/O priority and only reads.
+
+```
+stlib scan --db index.db /path/to/library
+stlib search --db index.db [--creator "Loot Studios"] [--limit 50] bell head
+```
+
+`scan` brings the index up to date. Models are matched by folder and only
+rewritten when their content changed (files, sizes, modification times), so
+a rescan of an unchanged library writes nothing and a model keeps its id
+while its folder stays. `search` matches every word as a prefix against
+model name, creator, release and category (diacritics ignored).
 
 ## Building
 

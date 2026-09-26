@@ -1,43 +1,110 @@
 // Command stlib is the stl-library CLI. It only wires adapters into the
 // app's use cases.
 //
-//	stlib check <library-root>   read the library, report models and the
-//	                             folders that don't follow the convention
+//	stlib check <library-root>                 report models and the folders
+//	                                           that don't follow the convention
+//	stlib scan --db <index.db> <library-root>  bring the index up to date
+//	stlib search --db <index.db> [--creator C] [words…]
 package main
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"sort"
+	"strings"
+	"time"
 
 	"github.com/codeStev/stl-library/internal/adapters/disk"
+	"github.com/codeStev/stl-library/internal/adapters/sqlite"
 	"github.com/codeStev/stl-library/internal/app"
 	"github.com/codeStev/stl-library/internal/platform/lowprio"
 )
 
+const usage = `usage:
+  stlib check <library-root>
+  stlib scan --db <index.db> <library-root>
+  stlib search --db <index.db> [--creator <name>] [--limit N] [words...]`
+
 func main() {
-	if err := run(os.Args[1:], os.Stdout); err != nil {
+	if err := run(context.Background(), os.Args[1:], os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "stlib:", err)
 		os.Exit(1)
 	}
 }
 
-func run(args []string, out io.Writer) error {
-	if len(args) != 2 || args[0] != "check" {
-		return fmt.Errorf("usage: stlib check <library-root>")
+func run(ctx context.Context, args []string, out io.Writer) error {
+	if len(args) == 0 {
+		return errors.New(usage)
 	}
+	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	db := fs.String("db", "", "index database")
+	creator := fs.String("creator", "", "only this creator")
+	limit := fs.Int("limit", 50, "maximum hits")
+	if err := fs.Parse(args[1:]); err != nil {
+		return fmt.Errorf("%v\n%s", err, usage)
+	}
+	rest := fs.Args()
+	switch args[0] {
+	case "check":
+		if len(rest) != 1 {
+			return errors.New(usage)
+		}
+		lowPriority()
+		r, err := app.Check(ctx, disk.Lister{Root: rest[0]})
+		if err != nil {
+			return err
+		}
+		printReport(out, r)
+	case "scan":
+		if len(rest) != 1 || *db == "" {
+			return errors.New(usage)
+		}
+		lowPriority()
+		s, err := sqlite.Open(*db)
+		if err != nil {
+			return err
+		}
+		defer s.Close()
+		start := time.Now()
+		st, err := app.Scan(ctx, disk.Lister{Root: rest[0]}, s)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "scanned in %s: %d added, %d updated, %d removed, %d unchanged; %d folders don't follow the convention\n",
+			time.Since(start).Round(time.Millisecond), st.Added, st.Updated, st.Removed, st.Unchanged, st.Issues)
+	case "search":
+		if *db == "" {
+			return errors.New(usage)
+		}
+		s, err := sqlite.Open(*db)
+		if err != nil {
+			return err
+		}
+		defer s.Close()
+		hits, err := app.Search(ctx, s, app.Query{Text: strings.Join(rest, " "), Creator: *creator, Limit: *limit})
+		if err != nil {
+			return err
+		}
+		for _, h := range hits {
+			fmt.Fprintf(out, "%6d  %-40s %d variants, %d parts, %.1f MB  %s\n",
+				h.ID, h.Name, h.Variants, h.Parts, float64(h.Bytes)/1e6, h.Dir)
+		}
+	default:
+		return errors.New(usage)
+	}
+	return nil
+}
+
+func lowPriority() {
 	if err := lowprio.Apply(); err != nil {
 		slog.Warn("could not lower process priority", "err", err)
 	}
-	r, err := app.Check(context.Background(), disk.Lister{Root: args[1]})
-	if err != nil {
-		return err
-	}
-	printReport(out, r)
-	return nil
 }
 
 func printReport(out io.Writer, r app.Report) {
