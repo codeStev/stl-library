@@ -39,9 +39,9 @@ type Printer struct {
 	// values are what the protocol specifies.
 	UploadChunk   int  // bytes per chunk; ChunkSize when 0
 	UploadNoCheck bool // send Check=0 (no MD5 verification by the printer)
-	// UploadTrace, if set, receives the timing of every chunk. Tracing
-	// keeps the socket's send buffer small, so that Send measures the
-	// network and Wait the printer.
+	// UploadTrace, if set, receives the timing of every chunk. On Linux
+	// the kernel tells when the printer has acknowledged all of a chunk,
+	// so Send measures the network and Wait the printer.
 	UploadTrace func(ChunkTiming)
 
 	mu          sync.Mutex
@@ -61,13 +61,10 @@ const ChunkSize = 1 << 20
 type ChunkTiming struct {
 	Offset, Bytes int64
 	Connect       time.Duration // TCP connection set up
-	Send          time.Duration // request written (with a small send buffer: acknowledged by the printer)
-	Wait          time.Duration // request written until the printer's answer starts
+	Send          time.Duration // until the printer acknowledged the whole request (Linux; elsewhere: until written)
+	Wait          time.Duration // from then until the printer's answer starts
+	RTT           time.Duration // the connection's smoothed round-trip time (Linux)
 }
-
-// traceSendBuffer is the socket send buffer while tracing: small, so
-// "written" means "on the network", not "copied into the kernel".
-const traceSendBuffer = 32 << 10
 
 func (p *Printer) ports() (int, int) {
 	c, d := p.ControlPort, p.DiscoveryPort
@@ -400,9 +397,19 @@ func (p *Printer) Upload(ctx context.Context, name string, size int64, open func
 	url := fmt.Sprintf("http://%s/uploadFile/upload", net.JoinHostPort(p.Host, strconv.Itoa(cport)))
 	uuid := randomHex(32)
 	transport := &http.Transport{DisableKeepAlives: true}
+	var conn func() net.Conn // the current chunk's connection, when tracing
 	if p.UploadTrace != nil {
-		d := &net.Dialer{Timeout: 30 * time.Second, Control: smallSendBuffer}
-		transport.DialContext = d.DialContext
+		var mu sync.Mutex
+		var last net.Conn
+		d := &net.Dialer{Timeout: 30 * time.Second}
+		transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			c, err := d.DialContext(ctx, network, addr)
+			mu.Lock()
+			last = c
+			mu.Unlock()
+			return c, err
+		}
+		conn = func() net.Conn { mu.Lock(); defer mu.Unlock(); return last }
 	}
 	client := &http.Client{Timeout: 5 * time.Minute, Transport: transport}
 	chunk := ChunkSize
@@ -420,7 +427,7 @@ func (p *Printer) Upload(ctx context.Context, name string, size int64, open func
 		if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !(errors.Is(err, io.EOF) && size == 0) {
 			return fmt.Errorf("reading %s: %w", name, err)
 		}
-		ok, msg, t, err := postChunk(ctx, client, url, name, uuid, sum, check, offset, size, buf[:n])
+		ok, msg, t, err := postChunk(ctx, client, conn, url, name, uuid, sum, check, offset, size, buf[:n])
 		if p.UploadTrace != nil && err == nil {
 			t.Offset, t.Bytes = offset, int64(n)
 			p.UploadTrace(t)
@@ -440,7 +447,7 @@ func (p *Printer) Upload(ctx context.Context, name string, size int64, open func
 	return nil
 }
 
-func postChunk(ctx context.Context, client *http.Client, url, name, uuid, sum, check string, offset, total int64, data []byte) (bool, string, ChunkTiming, error) {
+func postChunk(ctx context.Context, client *http.Client, conn func() net.Conn, url, name, uuid, sum, check string, offset, total int64, data []byte) (bool, string, ChunkTiming, error) {
 	var t ChunkTiming
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
@@ -453,12 +460,30 @@ func postChunk(ctx context.Context, client *http.Client, url, name, uuid, sum, c
 	mw.Close()
 	// The hooks run on the transport's goroutines.
 	var mu sync.Mutex
-	var start, connected, wrote, answered time.Time
+	var start, connected, wrote, acked, answered time.Time
+	var rtt time.Duration
 	at := func(p *time.Time) { mu.Lock(); *p = time.Now(); mu.Unlock() }
+	ackDone := make(chan struct{})
 	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
-		ConnectStart:         func(string, string) { at(&start) },
-		ConnectDone:          func(string, string, error) { at(&connected) },
-		WroteRequest:         func(httptrace.WroteRequestInfo) { at(&wrote) },
+		ConnectStart: func(string, string) { at(&start) },
+		ConnectDone:  func(string, string, error) { at(&connected) },
+		WroteRequest: func(httptrace.WroteRequestInfo) {
+			at(&wrote)
+			go func() { // written into the kernel; now wait for the printer's ACKs
+				defer close(ackDone)
+				if conn == nil {
+					return
+				}
+				if c := conn(); c != nil {
+					if r, ok := waitAcked(ctx, c); ok {
+						at(&acked)
+						mu.Lock()
+						rtt = r
+						mu.Unlock()
+					}
+				}
+			}()
+		},
 		GotFirstResponseByte: func() { at(&answered) },
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &body)
@@ -470,8 +495,18 @@ func postChunk(ctx context.Context, client *http.Client, url, name, uuid, sum, c
 	if err != nil {
 		return false, "", t, fmt.Errorf("uploading to the printer: %w", err)
 	}
+	if conn != nil {
+		select { // the connection closes after the answer; the ACKs came before it
+		case <-ackDone:
+		case <-time.After(time.Second):
+		}
+	}
 	mu.Lock()
-	t.Connect, t.Send, t.Wait = connected.Sub(start), wrote.Sub(connected), answered.Sub(wrote)
+	sent := wrote
+	if !acked.IsZero() && acked.Before(answered) {
+		sent = acked
+	}
+	t.Connect, t.Send, t.Wait, t.RTT = connected.Sub(start), sent.Sub(connected), answered.Sub(sent), rtt
 	mu.Unlock()
 	t.Wait = max(t.Wait, 0) // an early answer, before the body was written
 	defer resp.Body.Close()

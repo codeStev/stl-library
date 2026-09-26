@@ -2,8 +2,12 @@
 
 package sdcp
 
-import "syscall"
+import (
+	"context"
+	"net"
+	"time"
+)
 
-// smallSendBuffer is a no-op here: Send then includes less of the network
-// time (the kernel buffers more of each chunk).
-func smallSendBuffer(_, _ string, _ syscall.RawConn) error { return nil }
+// waitAcked can't ask the kernel here: Send then only measures until the
+// request was written (the kernel may still be sending).
+func waitAcked(context.Context, net.Conn) (time.Duration, bool) { return 0, false }

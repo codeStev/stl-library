@@ -187,7 +187,7 @@ func runPrinter(ctx context.Context, host, db string, args []string, out io.Writ
 			sp.UploadTrace = tr.chunk
 			fmt.Fprintf(out, "tracing the upload of %s (%s), chunk %s, Check=%v - no print is started\n",
 				path.Base(file), size(info.Size()), size(int64(max(chunkKB<<10, sdcp.ChunkSize))), !noCheck)
-			fmt.Fprintln(out, "  chunk  offset      connect    send     wait    network")
+			fmt.Fprintln(out, "  chunk  offset      connect    send     wait    network     rtt")
 		}
 		start := time.Now()
 		last := -1
@@ -282,8 +282,8 @@ type uploadTrace struct {
 
 func (t *uploadTrace) chunk(c sdcp.ChunkTiming) {
 	t.chunks = append(t.chunks, c)
-	fmt.Fprintf(t.out, "  %5d  %-10s  %7s  %7s  %7s  %s\n", len(t.chunks), size(c.Offset),
-		ms(c.Connect), ms(c.Send), ms(c.Wait), rate(c.Bytes, c.Send))
+	fmt.Fprintf(t.out, "  %5d  %-10s  %7s  %7s  %7s  %-10s  %s\n", len(t.chunks), size(c.Offset),
+		ms(c.Connect), ms(c.Send), ms(c.Wait), rate(c.Bytes, c.Send), ms(c.RTT))
 }
 
 func (t *uploadTrace) summary(total time.Duration) {
@@ -298,9 +298,8 @@ func (t *uploadTrace) summary(total time.Duration) {
 	n := time.Duration(len(t.chunks))
 	fmt.Fprintf(t.out, "\n%d chunks, %s in %s = %s overall\n", len(t.chunks), size(bytes), total.Round(time.Second), rate(bytes, total))
 	fmt.Fprintf(t.out, "  connecting: %s total (%s per chunk)\n", connect.Round(time.Millisecond), ms(connect/n))
-	fmt.Fprintf(t.out, "  sending:    %s total (%s per chunk) - the network, %s\n", send.Round(time.Millisecond), ms(send/n), rate(bytes, send))
+	fmt.Fprintf(t.out, "  sending:    %s total (%s per chunk) - until the printer's network stack had it all, %s\n", send.Round(time.Millisecond), ms(send/n), rate(bytes, send))
 	fmt.Fprintf(t.out, "  waiting:    %s total (%s per chunk) - the printer handling a chunk\n", wait.Round(time.Millisecond), ms(wait/n))
-	fmt.Fprintln(t.out, "  (waiting also holds the last few KB of each chunk still in flight - small unless the network is very slow)")
 	if len(t.chunks) >= 10 {
 		first, last := avgWait(t.chunks[:5]), avgWait(t.chunks[len(t.chunks)-5:])
 		fmt.Fprintf(t.out, "  waiting per chunk, first 5: %s, last 5: %s\n", ms(first), ms(last))
