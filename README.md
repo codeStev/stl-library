@@ -14,8 +14,9 @@ exactly, and lists folders that don't conform so you can fix them yourself.
 
 Status: in development. What exists so far: the definition of the
 convention (`convention/`), `stlib check` (reads a library, reports its
-models and every folder that doesn't follow the convention), and a SQLite
-index with full-text search (`stlib scan`, `stlib search`).
+models and every folder that doesn't follow the convention), a SQLite
+index with full-text search (`stlib scan`, `stlib search`), and the JSON
+API (`stlib serve`). The web UI and Docker image come next.
 
 ## Folder convention
 
@@ -69,8 +70,8 @@ Hexagonal. The dependency rule is enforced by `internal/architecture_test.go`:
 |---|---|---|
 | convention (public, pure) | `convention` | standard library only, no I/O |
 | domain (pure) | `internal/core/library` - reads a file listing into models, variants, parts and issues | convention |
-| use cases + ports | `internal/app` (`Check`, `Scan`, `Search`; ports `Lister`, `Store`) | core |
-| adapters | `internal/adapters/disk` (read-only listing), `internal/adapters/sqlite` (index, FTS5) | app, core |
+| use cases + ports | `internal/app` (`Check`, `Scan`, `Search`, `VariantZip`; ports `Lister`, `Store`, `Files`) | core |
+| adapters | `internal/adapters/disk` (read-only listing and file access), `internal/adapters/sqlite` (index, FTS5), `internal/adapters/httpapi` (JSON API, driving) | app, core |
 | driving adapter | `cmd/stlib` | everything, wiring only |
 
 ## Usage
@@ -93,6 +94,36 @@ rewritten when their content changed (files, sizes, modification times), so
 a rescan of an unchanged library writes nothing and a model keeps its id
 while its folder stays. `search` matches every word as a prefix against
 model name, creator, release and category (diacritics ignored).
+
+### Server
+
+```
+LIBRARY_ROOT=/path/to/library DATA_DIR=./data stlib serve
+```
+
+| Variable | Default | |
+|---|---|---|
+| `LIBRARY_ROOT` | (required) | the library; only read, never written |
+| `DATA_DIR` | `./data` | the index (`index.db`) |
+| `LISTEN_ADDR` | `127.0.0.1:8080` | |
+| `SCAN_INTERVAL` | `1h` | time between rescans (at least `1m`); the first scan starts right away |
+
+Each has a flag of the same meaning (`--root`, `--data`, `--listen`,
+`--scan-interval`).
+
+API:
+
+| | |
+|---|---|
+| `GET /api/models?q=&creator=&limit=&offset=` | search / list models |
+| `GET /api/models/{id}` | a model with its variants (dimensions, option, parts) and images |
+| `GET /api/creators` | creators with their model counts |
+| `GET /api/issues` | folders that don't follow the convention |
+| `GET /api/variants/{id}/zip` | a variant's parts as a zip (stored uncompressed, streamed) |
+| `GET /api/parts/{id}`, `GET /api/images/{id}` | single files |
+
+There is no authentication: keep it on a private network (it listens on
+localhost by default).
 
 ## Building
 

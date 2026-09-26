@@ -5,6 +5,9 @@
 //	                                           that don't follow the convention
 //	stlib scan --db <index.db> <library-root>  bring the index up to date
 //	stlib search --db <index.db> [--creator C] [words…]
+//	stlib serve                                serve the API; configured by
+//	                                           LIBRARY_ROOT, DATA_DIR,
+//	                                           LISTEN_ADDR, SCAN_INTERVAL
 package main
 
 import (
@@ -28,7 +31,9 @@ import (
 const usage = `usage:
   stlib check <library-root>
   stlib scan --db <index.db> <library-root>
-  stlib search --db <index.db> [--creator <name>] [--limit N] [words...]`
+  stlib search --db <index.db> [--creator <name>] [--limit N] [words...]
+  stlib serve [--root <library-root>] [--data <dir>] [--listen <addr>] [--scan-interval <duration>]
+      (defaults from LIBRARY_ROOT, DATA_DIR, LISTEN_ADDR, SCAN_INTERVAL)`
 
 func main() {
 	if err := run(context.Background(), os.Args[1:], os.Stdout); err != nil {
@@ -46,6 +51,10 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	db := fs.String("db", "", "index database")
 	creator := fs.String("creator", "", "only this creator")
 	limit := fs.Int("limit", 50, "maximum hits")
+	root := fs.String("root", os.Getenv("LIBRARY_ROOT"), "library root")
+	data := fs.String("data", envOr("DATA_DIR", "./data"), "data directory")
+	listen := fs.String("listen", envOr("LISTEN_ADDR", "127.0.0.1:8080"), "listen address")
+	interval := fs.String("scan-interval", envOr("SCAN_INTERVAL", "1h"), "time between library scans")
 	if err := fs.Parse(args[1:]); err != nil {
 		return fmt.Errorf("%v\n%s", err, usage)
 	}
@@ -95,10 +104,27 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 			fmt.Fprintf(out, "%6d  %-40s %d variants, %d parts, %.1f MB  %s\n",
 				h.ID, h.Name, h.Variants, h.Parts, float64(h.Bytes)/1e6, h.Dir)
 		}
+	case "serve":
+		if *root == "" {
+			return errors.New("serve: no library root (set LIBRARY_ROOT or --root)\n" + usage)
+		}
+		every, err := time.ParseDuration(*interval)
+		if err != nil || every < time.Minute {
+			return fmt.Errorf("serve: scan interval %q: must be a duration of at least 1m", *interval)
+		}
+		lowPriority()
+		return serve(ctx, *root, *data, *listen, every)
 	default:
 		return errors.New(usage)
 	}
 	return nil
+}
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }
 
 func lowPriority() {
