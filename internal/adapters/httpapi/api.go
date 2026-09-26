@@ -26,6 +26,8 @@ type API struct {
 	User   app.UserData
 	// Importer is set when importing from a downloads folder is on.
 	Importer *app.Importer
+	// Printing handles the (optional) network printer.
+	Printing *app.Printing
 }
 
 // Handler routes /api/… requests.
@@ -41,6 +43,16 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /api/images/{id}", a.image)
 	mux.HandleFunc("GET /api/images/{id}/thumb", a.thumb)
 	mux.HandleFunc("GET /api/tags", a.tags)
+	mux.HandleFunc("GET /api/printer", a.printerStatus)
+	mux.HandleFunc("POST /api/parts/{id}/print", a.sendToPrinter)
+	mux.HandleFunc("POST /api/printer/{action}", a.printerControl)
+	mux.HandleFunc("DELETE /api/printer/transfer", a.cancelTransfer)
+	mux.HandleFunc("GET /api/printer/files", a.printerFiles)
+	mux.HandleFunc("POST /api/printer/files/print", a.printExisting)
+	mux.HandleFunc("POST /api/printer/files/delete", a.deletePrinterFiles)
+	mux.HandleFunc("GET /api/settings/printer", a.printerSettings)
+	mux.HandleFunc("PUT /api/settings/printer", a.savePrinterSettings)
+	mux.HandleFunc("POST /api/settings/printer/test", a.testPrinterSettings)
 	mux.HandleFunc("GET /api/imports", a.imports)
 	mux.HandleFunc("POST /api/imports/request", a.requestImport)
 	mux.HandleFunc("PUT /api/models/{id}/tags", a.setTags)
@@ -478,6 +490,211 @@ func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
+type printerJob struct {
+	File        string  `json:"file"`
+	State       string  `json:"state"`
+	Layer       int     `json:"layer"`
+	Layers      int     `json:"layers"`
+	Progress    float64 `json:"progress"`
+	ElapsedMs   int64   `json:"elapsedMs"`
+	RemainingMs int64   `json:"remainingMs"`
+	Error       string  `json:"error,omitempty"`
+}
+
+type transfer struct {
+	PartID int64  `json:"partId"`
+	File   string `json:"file"`
+	Size   int64  `json:"size"`
+	Sent   int64  `json:"sent"`
+	Start  bool   `json:"start"`
+	State  string `json:"state"`
+	Error  string `json:"error,omitempty"`
+}
+
+func transferJSON(t *app.Transfer) *transfer {
+	if t == nil {
+		return nil
+	}
+	return &transfer{t.PartID, t.File, t.Size, t.Sent, t.Start, t.State, t.Error}
+}
+
+func (a *API) printerStatus(w http.ResponseWriter, r *http.Request) {
+	type status struct {
+		Name     string      `json:"name"`
+		Firmware string      `json:"firmware,omitempty"`
+		Machine  string      `json:"machine"`
+		UVTemp   float64     `json:"uvTemp,omitempty"`
+		Job      *printerJob `json:"job,omitempty"`
+	}
+	out := struct {
+		Enabled  bool      `json:"enabled"`
+		Status   *status   `json:"status,omitempty"`
+		Transfer *transfer `json:"transfer,omitempty"`
+	}{}
+	if a.Printing != nil {
+		st, t, err := a.Printing.Status(r.Context())
+		if errors.Is(err, app.ErrNoPrinter) {
+			writeJSON(w, out)
+			return
+		}
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		out.Enabled = true
+		s := &status{Name: st.Name, Firmware: st.Firmware, Machine: string(st.Machine), UVTemp: st.UVTemp}
+		if j := st.Job; j != nil {
+			s.Job = &printerJob{j.File, string(j.State), j.Layer, j.Layers, j.Progress(), j.ElapsedMs, j.RemainingMs(), j.Error}
+		}
+		out.Status, out.Transfer = s, transferJSON(t)
+	}
+	writeJSON(w, out)
+}
+
+func (a *API) sendToPrinter(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	var body struct {
+		Start bool `json:"start"`
+	}
+	if !ok || !readJSON(w, r, &body) {
+		return
+	}
+	if a.Printing == nil {
+		http.Error(w, "no printer configured", http.StatusConflict)
+		return
+	}
+	t, err := a.Printing.Send(r.Context(), id, body.Start)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+	writeJSON(w, transferJSON(t))
+}
+
+func (a *API) printerControl(w http.ResponseWriter, r *http.Request) {
+	var body struct{}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if a.Printing == nil {
+		http.Error(w, "no printer configured", http.StatusConflict)
+		return
+	}
+	if err := a.Printing.Control(r.Context(), r.PathValue("action")); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) cancelTransfer(w http.ResponseWriter, r *http.Request) {
+	if a.Printing == nil {
+		http.Error(w, "no printer configured", http.StatusConflict)
+		return
+	}
+	if err := a.Printing.CancelTransfer(); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type printerSettingsJSON struct {
+	Host          string `json:"host"`
+	ControlPort   int    `json:"controlPort,omitempty"`
+	DiscoveryPort int    `json:"discoveryPort,omitempty"`
+}
+
+func (a *API) printerSettings(w http.ResponseWriter, r *http.Request) {
+	if a.Printing == nil {
+		writeJSON(w, map[string]any{"source": "none"})
+		return
+	}
+	s, source, err := a.Printing.Config(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, struct {
+		printerSettingsJSON
+		Source string `json:"source"` // saved, default (environment), none
+	}{printerSettingsJSON{s.Host, s.ControlPort, s.DiscoveryPort}, source})
+}
+
+func (a *API) savePrinterSettings(w http.ResponseWriter, r *http.Request) {
+	var body printerSettingsJSON
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if err := a.Printing.SaveConfig(r.Context(), app.PrinterSettings{Host: body.Host, ControlPort: body.ControlPort, DiscoveryPort: body.DiscoveryPort}); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) testPrinterSettings(w http.ResponseWriter, r *http.Request) {
+	var body printerSettingsJSON
+	if !readJSON(w, r, &body) {
+		return
+	}
+	st, err := a.Printing.TestConfig(r.Context(), app.PrinterSettings{Host: body.Host, ControlPort: body.ControlPort, DiscoveryPort: body.DiscoveryPort})
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": st.Machine != "offline", "machine": st.Machine, "name": st.Name, "firmware": st.Firmware})
+}
+
+func (a *API) printerFiles(w http.ResponseWriter, r *http.Request) {
+	files, err := a.Printing.PrinterFiles(r.Context(), r.URL.Query().Get("dir"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	type file struct {
+		Path   string `json:"path"`
+		Folder bool   `json:"folder,omitempty"`
+		Size   int64  `json:"size,omitempty"`
+		Used   int64  `json:"used,omitempty"`
+		Total  int64  `json:"total,omitempty"`
+	}
+	out := make([]file, 0, len(files))
+	for _, f := range files {
+		out = append(out, file{f.Path, f.Folder, f.Size, f.Used, f.Total})
+	}
+	writeJSON(w, out)
+}
+
+func (a *API) printExisting(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Path string `json:"path"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if err := a.Printing.PrintExisting(r.Context(), body.Path); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) deletePrinterFiles(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Paths []string `json:"paths"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if err := a.Printing.DeletePrinterFiles(r.Context(), body.Paths); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (a *API) imports(w http.ResponseWriter, r *http.Request) {
 	type record struct {
 		Source  string `json:"source"`
@@ -578,7 +795,11 @@ func fail(w http.ResponseWriter, err error) {
 		return
 	}
 	if errors.Is(err, app.ErrInvalid) {
-		http.Error(w, "invalid input", http.StatusBadRequest)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if errors.Is(err, app.ErrBusy) || errors.Is(err, app.ErrNoPrinter) {
+		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 	slog.Error("request failed", "err", err)

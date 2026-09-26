@@ -5,10 +5,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"image"
 	"image/jpeg"
 	"image/png"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,8 +18,11 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/codeStev/stl-library/internal/adapters/disk"
+	"github.com/codeStev/stl-library/internal/adapters/sdcp"
+	"github.com/codeStev/stl-library/internal/adapters/sdcp/sdcptest"
 	"github.com/codeStev/stl-library/internal/adapters/sqlite"
 	"github.com/codeStev/stl-library/internal/app"
 )
@@ -366,5 +371,128 @@ func TestHideRelabelAndImportsDisabled(t *testing.T) {
 	}
 	if code, _ := send(t, srv, "POST", "/api/imports/request", `{"source":"x"}`); code != 409 {
 		t.Errorf("request without importer: %d", code)
+	}
+}
+
+func TestPrinterAgainstTheMock(t *testing.T) {
+	// A server with a mock printer; never a real one.
+	root := t.TempDir()
+	os.MkdirAll(filepath.Join(root, "Wicked/Panther/Supported Chitubox"), 0o755)
+	os.WriteFile(filepath.Join(root, "Wicked/Panther/Supported Chitubox/panther.ctb"), []byte("CTBDATA"), 0o644)
+	os.WriteFile(filepath.Join(root, "Wicked/Panther/Supported Chitubox/panther.chitubox"), []byte("PROJECT"), 0o644)
+	store, _ := sqlite.Open(filepath.Join(t.TempDir(), "index.db"))
+	defer store.Close()
+	app.Scan(context.Background(), disk.Lister{Root: root}, store)
+	mock := sdcptest.New()
+	h, u, err := mock.Listen("127.0.0.1:0", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+	port := func(addr string) int { _, p, _ := net.SplitHostPort(addr); n, _ := strconv.Atoi(p); return n }
+	files := disk.Files{Root: root}
+	printing := &app.Printing{Store: store, Files: files, Settings: store,
+		Connect: func(s app.PrinterSettings) app.Printer {
+			return &sdcp.Printer{Host: s.Host, ControlPort: s.ControlPort, DiscoveryPort: s.DiscoveryPort, Timeout: 3 * time.Second}
+		}}
+	api := &API{Store: store, Files: files, User: app.UserData{Store: store}, Printing: printing}
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	// No printer yet: off. Then configure the mock through the settings.
+	var off struct {
+		Enabled bool `json:"enabled"`
+	}
+	getJSON(t, srv, "/api/printer", &off)
+	if off.Enabled {
+		t.Error("printer enabled without settings")
+	}
+	mockSettings := fmt.Sprintf(`{"host":"127.0.0.1","controlPort":%d,"discoveryPort":%d}`, port(h), port(u))
+	if code, body := send(t, srv, "POST", "/api/settings/printer/test", mockSettings); code != 200 || !strings.Contains(body, `"ok":true`) {
+		t.Fatalf("test settings: %d %s", code, body)
+	}
+	if code, _ := send(t, srv, "PUT", "/api/settings/printer", mockSettings); code != 204 {
+		t.Fatalf("save settings: %d", code)
+	}
+	var cfg struct {
+		Host   string `json:"host"`
+		Source string `json:"source"`
+	}
+	getJSON(t, srv, "/api/settings/printer", &cfg)
+	if cfg.Host != "127.0.0.1" || cfg.Source != "saved" {
+		t.Errorf("settings: %+v", cfg)
+	}
+
+	var m modelDetail
+	var hits []modelSummary
+	getJSON(t, srv, "/api/models?q=panther", &hits)
+	getJSON(t, srv, "/api/models/"+itoa(hits[0].ID), &m)
+	var ctb, project int64
+	for _, p := range m.Variants[0].Parts {
+		if strings.HasSuffix(p.Name, ".ctb") {
+			ctb = p.ID
+		} else {
+			project = p.ID
+		}
+	}
+	if code, body := send(t, srv, "POST", "/api/parts/"+itoa(project)+"/print", `{"start":true}`); code != 400 {
+		t.Errorf("project file: %d %s", code, body)
+	}
+	if code, body := send(t, srv, "POST", "/api/parts/"+itoa(ctb)+"/print", `{"start":true}`); code != 202 {
+		t.Fatalf("send: %d %s", code, body)
+	}
+	var st struct {
+		Enabled bool `json:"enabled"`
+		Status  struct {
+			Machine string `json:"machine"`
+			Job     *struct {
+				File  string `json:"file"`
+				State string `json:"state"`
+			} `json:"job"`
+		} `json:"status"`
+		Transfer *struct {
+			State string `json:"state"`
+			Sent  int64  `json:"sent"`
+		} `json:"transfer"`
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		getJSON(t, srv, "/api/printer", &st)
+		if st.Transfer != nil && st.Transfer.State == "printing" && st.Status.Machine == "printing" {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !st.Enabled || st.Transfer == nil || st.Transfer.State != "printing" || st.Transfer.Sent != 7 || st.Status.Job == nil || st.Status.Job.File != "panther.ctb" {
+		t.Fatalf("printer status: %+v", st)
+	}
+	if code, _ := send(t, srv, "POST", "/api/parts/"+itoa(ctb)+"/print", `{"start":false}`); code != 409 {
+		t.Errorf("send while printing: %d", code)
+	}
+	for _, a := range []string{"pause", "resume", "stop"} {
+		if code, body := send(t, srv, "POST", "/api/printer/"+a, `{}`); code != 204 {
+			t.Errorf("%s: %d %s", a, code, body)
+		}
+	}
+	if code, _ := send(t, srv, "POST", "/api/printer/explode", `{}`); code != 400 {
+		t.Errorf("unknown action: %d", code)
+	}
+	var pf []struct {
+		Path string `json:"path"`
+		Size int64  `json:"size"`
+	}
+	getJSON(t, srv, "/api/printer/files", &pf)
+	if len(pf) != 1 || pf[0].Path != "/local/panther.ctb" || pf[0].Size != 7 {
+		t.Errorf("printer files: %+v", pf)
+	}
+	if code, body := send(t, srv, "POST", "/api/printer/files/print", `{"path":"/local/panther.ctb"}`); code != 204 {
+		t.Errorf("print existing: %d %s", code, body)
+	}
+	send(t, srv, "POST", "/api/printer/stop", `{}`)
+	if code, _ := send(t, srv, "POST", "/api/printer/files/delete", `{"paths":["/local/panther.ctb"]}`); code != 204 {
+		t.Errorf("delete: %d", code)
+	}
+	if got := strings.Join(mock.Log(), ","); got != "start /local/panther.ctb,pause,resume,stop,start /local/panther.ctb,stop,delete /local/panther.ctb" {
+		t.Errorf("mock saw: %s", got)
 	}
 }
