@@ -28,6 +28,8 @@ type API struct {
 	Importer *app.Importer
 	// Printing handles the (optional) network printer.
 	Printing *app.Printing
+	// Notifications sends print and import events (ntfy, email).
+	Notifications *app.Notifications
 }
 
 // Handler routes /api/… requests.
@@ -53,6 +55,9 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /api/settings/printer", a.printerSettings)
 	mux.HandleFunc("PUT /api/settings/printer", a.savePrinterSettings)
 	mux.HandleFunc("POST /api/settings/printer/test", a.testPrinterSettings)
+	mux.HandleFunc("GET /api/settings/notifications", a.notificationSettings)
+	mux.HandleFunc("PUT /api/settings/notifications", a.saveNotificationSettings)
+	mux.HandleFunc("POST /api/settings/notifications/test", a.testNotifications)
 	mux.HandleFunc("GET /api/imports", a.imports)
 	mux.HandleFunc("POST /api/imports/request", a.requestImport)
 	mux.HandleFunc("PUT /api/models/{id}/tags", a.setTags)
@@ -690,6 +695,90 @@ func (a *API) deletePrinterFiles(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := a.Printing.DeletePrinterFiles(r.Context(), body.Paths); err != nil {
 		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type notificationSettingsJSON struct {
+	NtfyURL       string          `json:"ntfyUrl"`
+	NtfyToken     string          `json:"ntfyToken,omitempty"` // write-only
+	NtfyTokenSet  bool            `json:"ntfyTokenSet"`
+	ClearToken    bool            `json:"clearNtfyToken,omitempty"`
+	SMTPHost      string          `json:"smtpHost"`
+	SMTPPort      int             `json:"smtpPort,omitempty"`
+	SMTPSecurity  string          `json:"smtpSecurity,omitempty"`
+	SMTPUser      string          `json:"smtpUsername,omitempty"`
+	SMTPPassword  string          `json:"smtpPassword,omitempty"` // write-only
+	SMTPPassSet   bool            `json:"smtpPasswordSet"`
+	ClearPassword bool            `json:"clearSmtpPassword,omitempty"`
+	From          string          `json:"emailFrom,omitempty"`
+	To            string          `json:"emailTo,omitempty"`
+	Events        map[string]bool `json:"events"`
+	AllEvents     []string        `json:"allEvents,omitempty"`
+}
+
+func (b notificationSettingsJSON) settings() app.NotificationSettings {
+	return app.NotificationSettings{
+		Ntfy:   app.NtfySettings{URL: strings.TrimSpace(b.NtfyURL), Token: b.NtfyToken},
+		Email:  app.EmailSettings{Host: strings.TrimSpace(b.SMTPHost), Port: b.SMTPPort, Security: b.SMTPSecurity, Username: b.SMTPUser, Password: b.SMTPPassword, From: b.From, To: b.To},
+		Events: b.Events,
+	}
+}
+
+func (a *API) notificationSettings(w http.ResponseWriter, r *http.Request) {
+	s, err := a.Notifications.Settings(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, notificationSettingsJSON{
+		NtfyURL: s.Ntfy.URL, NtfyTokenSet: s.Ntfy.Token != "",
+		SMTPHost: s.Email.Host, SMTPPort: s.Email.Port, SMTPSecurity: s.Email.Security, SMTPUser: s.Email.Username,
+		SMTPPassSet: s.Email.Password != "", From: s.Email.From, To: s.Email.To, Events: s.Events, AllEvents: app.AllEvents,
+	})
+}
+
+func (a *API) saveNotificationSettings(w http.ResponseWriter, r *http.Request) {
+	var body notificationSettingsJSON
+	if !readJSON(w, r, &body) {
+		return
+	}
+	s := body.settings()
+	if err := a.Notifications.Save(r.Context(), s, true); err != nil {
+		fail(w, err)
+		return
+	}
+	if body.ClearToken || body.ClearPassword { // explicit removal of a stored secret
+		cur, err := a.Notifications.Settings(r.Context())
+		if err == nil {
+			if body.ClearToken {
+				cur.Ntfy.Token = ""
+			}
+			if body.ClearPassword {
+				cur.Email.Password = ""
+			}
+			err = a.Notifications.Save(r.Context(), cur, false)
+		}
+		if err != nil {
+			fail(w, err)
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) testNotifications(w http.ResponseWriter, r *http.Request) {
+	var body notificationSettingsJSON
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if err := a.Notifications.Test(r.Context(), body.settings()); err != nil {
+		if errors.Is(err, app.ErrInvalid) {
+			fail(w, err)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

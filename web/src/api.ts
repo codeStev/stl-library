@@ -75,6 +75,32 @@ export interface PrinterSettings {
   source?: "saved" | "default" | "none";
 }
 
+export interface NotificationSettings {
+  ntfyUrl: string;
+  ntfyToken?: string;
+  ntfyTokenSet?: boolean;
+  clearNtfyToken?: boolean;
+  smtpHost: string;
+  smtpPort?: number;
+  smtpSecurity?: "starttls" | "tls" | "none";
+  smtpUsername?: string;
+  smtpPassword?: string;
+  smtpPasswordSet?: boolean;
+  clearSmtpPassword?: boolean;
+  emailFrom?: string;
+  emailTo?: string;
+  events: Record<string, boolean>;
+  allEvents?: string[];
+}
+
+export const EVENT_LABELS: Record<string, string> = {
+  "print.done": "A print finished",
+  "print.stopped": "A print was stopped",
+  "print.error": "The printer reported an error",
+  "import.done": "New models were imported",
+  "import.failed": "An import needs attention",
+};
+
 export const printable = (name: string) => /\.(ctb|goo)$/i.test(name);
 
 export function formatDuration(ms: number): string {
@@ -200,6 +226,9 @@ export const api = {
   savePrinterSettings: (s: PrinterSettings) => send("PUT", "/api/settings/printer", s),
   testPrinterSettings: (s: PrinterSettings) =>
     send<{ ok: boolean; machine: string; name?: string; firmware?: string }>("POST", "/api/settings/printer/test", s),
+  notificationSettings: () => get<NotificationSettings>("/api/settings/notifications"),
+  saveNotificationSettings: (s: NotificationSettings) => send("PUT", "/api/settings/notifications", s),
+  testNotifications: (s: NotificationSettings) => send("POST", "/api/settings/notifications/test", s),
   imports: () => get<{ enabled: boolean; records: ImportRecord[] }>("/api/imports"),
   requestImport: (source: string) => send("POST", "/api/imports/request", { source }),
   enqueue: (variantId: number, note = "") => send("PUT", `/api/variants/${variantId}/queue`, { note }),

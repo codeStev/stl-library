@@ -21,8 +21,10 @@ import (
 	"time"
 
 	"github.com/codeStev/stl-library/internal/adapters/disk"
+	"github.com/codeStev/stl-library/internal/adapters/notify"
 	"github.com/codeStev/stl-library/internal/adapters/sdcp"
 	"github.com/codeStev/stl-library/internal/adapters/sdcp/sdcptest"
+	"github.com/codeStev/stl-library/internal/adapters/secrets"
 	"github.com/codeStev/stl-library/internal/adapters/sqlite"
 	"github.com/codeStev/stl-library/internal/app"
 )
@@ -494,5 +496,36 @@ func TestPrinterAgainstTheMock(t *testing.T) {
 	}
 	if got := strings.Join(mock.Log(), ","); got != "start /local/panther.ctb,pause,resume,stop,start /local/panther.ctb,stop,delete /local/panther.ctb" {
 		t.Errorf("mock saw: %s", got)
+	}
+}
+
+func TestNotificationSettingsNeverReturnSecrets(t *testing.T) {
+	store, _ := sqlite.Open(filepath.Join(t.TempDir(), "index.db"))
+	defer store.Close()
+	keys, _ := secrets.New([]byte("0123456789abcdef0123456789abcdef"))
+	var gotAuth string
+	ntfy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { gotAuth = r.Header.Get("Authorization") }))
+	defer ntfy.Close()
+	api := &API{Store: store, Notifications: &app.Notifications{Store: store, Sealer: keys, Channels: notify.Channels}}
+	srv := httptest.NewServer(api.Handler())
+	defer srv.Close()
+
+	body := `{"ntfyUrl":"` + ntfy.URL + `/printer","ntfyToken":"tk_secret","smtpHost":"","events":{"print.done":true}}`
+	if code, b := send(t, srv, "PUT", "/api/settings/notifications", body); code != 204 {
+		t.Fatalf("save: %d %s", code, b)
+	}
+	_, raw := get(t, srv, "/api/settings/notifications")
+	if strings.Contains(string(raw), "tk_secret") || !strings.Contains(string(raw), `"ntfyTokenSet":true`) {
+		t.Errorf("settings response: %s", raw)
+	}
+	// Test with the saved token (not sent again).
+	if code, b := send(t, srv, "POST", "/api/settings/notifications/test", `{"ntfyUrl":"`+ntfy.URL+`/printer","events":{}}`); code != 204 || gotAuth != "Bearer tk_secret" {
+		t.Errorf("test: %d %s auth=%q", code, b, gotAuth)
+	}
+	if code, _ := send(t, srv, "POST", "/api/settings/notifications/test", `{"ntfyUrl":"http://127.0.0.1:1/x","events":{}}`); code != 502 {
+		t.Errorf("unreachable ntfy: %d", code)
+	}
+	if code, _ := send(t, srv, "PUT", "/api/settings/notifications", `{"ntfyUrl":"nope","events":{}}`); code != 400 {
+		t.Errorf("invalid: %d", code)
 	}
 }

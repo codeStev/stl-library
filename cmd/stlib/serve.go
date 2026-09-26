@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -14,6 +15,8 @@ import (
 
 	"github.com/codeStev/stl-library/internal/adapters/disk"
 	"github.com/codeStev/stl-library/internal/adapters/httpapi"
+	"github.com/codeStev/stl-library/internal/adapters/notify"
+	"github.com/codeStev/stl-library/internal/adapters/secrets"
 	"github.com/codeStev/stl-library/internal/adapters/sqlite"
 	"github.com/codeStev/stl-library/internal/adapters/web"
 	"github.com/codeStev/stl-library/internal/app"
@@ -42,11 +45,20 @@ func serve(ctx context.Context, root, data, listen string, every time.Duration, 
 
 	files := disk.Files{Root: root}
 	thumbs := app.NewThumbs(store, files, disk.ThumbCache{Dir: filepath.Join(data, "thumbs")})
+	keys, err := secrets.Load(os.Getenv("APP_SECRET"), data)
+	if err != nil {
+		return err
+	}
+	notifications := &app.Notifications{Store: store, Sealer: keys, Channels: notify.Channels,
+		OnError: func(event string, err error) { slog.Warn("notification not delivered", "event", event, "err", err) }}
 	printing := &app.Printing{Store: store, Files: files, Settings: store, Connect: newPrinter}
 	if addr := os.Getenv("PRINTER_ADDR"); addr != "" {
 		printing.Default = parsePrinterAddr(addr)
 	}
-	api := &httpapi.API{Store: store, Files: files, Thumbs: thumbs, User: app.UserData{Store: store}, Printing: printing}
+	api := &httpapi.API{Store: store, Files: files, Thumbs: thumbs, User: app.UserData{Store: store}, Printing: printing,
+		Notifications: notifications}
+	watcher := &app.PrintWatcher{Printing: printing, Store: store, Notify: notifications}
+	go watcher.Run(ctx, 20*time.Second)
 	mux := http.NewServeMux()
 	mux.Handle("/api/", api.Handler())
 	mux.Handle("/", web.Handler())
@@ -63,7 +75,7 @@ func serve(ctx context.Context, root, data, listen string, every time.Duration, 
 	if imp != nil {
 		importer = &app.Importer{Downloads: disk.Downloads{Root: imp.source}, Library: disk.LibraryWriter{Root: root}, Log: store, Settle: imp.settle}
 		api.Importer = importer
-		go importLoop(ctx, importer, imp.every, rescan)
+		go importLoop(ctx, importer, notifications, imp.every, rescan)
 	}
 	go scanLoop(ctx, disk.Lister{Root: root}, store, thumbs, every, rescan)
 
@@ -87,7 +99,7 @@ func serve(ctx context.Context, root, data, listen string, every time.Duration, 
 
 // importLoop imports new downloads every interval; when something was
 // imported it asks for a rescan.
-func importLoop(ctx context.Context, im *app.Importer, every time.Duration, rescan chan<- struct{}) {
+func importLoop(ctx context.Context, im *app.Importer, notes *app.Notifications, every time.Duration, rescan chan<- struct{}) {
 	for {
 		start := time.Now()
 		sum, err := im.Run(ctx)
@@ -99,6 +111,14 @@ func importLoop(ctx context.Context, im *app.Importer, every time.Duration, resc
 		case sum.Imported+sum.Failed+sum.Baselined > 0 || sum.Files > 0:
 			slog.Info("import done", "took", time.Since(start).Round(time.Second), "imported", sum.Imported, "files", sum.Files,
 				"waiting", sum.Waiting, "failed", sum.Failed, "recorded as already there", sum.Baselined)
+		}
+		if sum.Imported > 0 {
+			notes.Notify(ctx, app.Notification{Event: app.EventImportDone, Title: "New models imported",
+				Message: fmt.Sprintf("%d download folder(s) imported (%d files).", sum.Imported, sum.Files)})
+		}
+		if sum.Failed > 0 {
+			notes.Notify(ctx, app.Notification{Event: app.EventImportFailed, Title: "Import needs attention", Priority: "high",
+				Message: fmt.Sprintf("%d download folder(s) could not be imported - see the Imports page.", sum.Failed)})
 		}
 		if sum.Files > 0 {
 			select {

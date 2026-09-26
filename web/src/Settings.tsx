@@ -1,8 +1,17 @@
 import { useEffect, useState } from "react";
-import { api, type PrinterSettings } from "./api";
+import { api, EVENT_LABELS, type NotificationSettings, type PrinterSettings } from "./api";
 
-// Settings: how to reach the printer.
+// Settings: the printer and notifications.
 export function Settings() {
+  return (
+    <>
+      <PrinterSection />
+      <NotificationsSection />
+    </>
+  );
+}
+
+function PrinterSection() {
   const [s, setS] = useState<PrinterSettings | null>(null);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
@@ -78,6 +87,134 @@ export function Settings() {
             }}
           >
             Test connection
+          </button>
+          <button type="submit">Save</button>
+        </div>
+      </form>
+      {msg && <p className="ok">{msg}</p>}
+      {error && <p className="error">{error}</p>}
+    </div>
+  );
+}
+
+function NotificationsSection() {
+  const [s, setS] = useState<NotificationSettings | null>(null);
+  const [msg, setMsg] = useState("");
+  const [error, setError] = useState("");
+  const load = () => api.notificationSettings().then(setS, (e) => setError(String(e)));
+  useEffect(() => {
+    load();
+  }, []);
+  if (!s) return error ? <p className="error">{error}</p> : null;
+  const set = (patch: Partial<NotificationSettings>) => setS({ ...s, ...patch });
+  const fail = (e: unknown) => (setMsg(""), setError(e instanceof Error ? e.message : String(e)));
+  const body = (): NotificationSettings => ({ ...s, allEvents: undefined });
+
+  return (
+    <div className="settings">
+      <h2>Notifications</h2>
+      <p className="sub">
+        Get told when a print finishes or fails and when new models were imported - by{" "}
+        <a href="https://ntfy.sh" target="_blank" rel="noreferrer">
+          ntfy
+        </a>{" "}
+        (push to your phone) and/or email.
+      </p>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          setError("");
+          api.saveNotificationSettings(body()).then(() => (setMsg("Saved."), load()), fail);
+        }}
+      >
+        <fieldset>
+          <legend>Send when</legend>
+          {(s.allEvents ?? Object.keys(EVENT_LABELS)).map((ev) => (
+            <label key={ev} className="check">
+              <input
+                type="checkbox"
+                checked={!!s.events[ev]}
+                onChange={(e) => set({ events: { ...s.events, [ev]: e.target.checked } })}
+              />
+              {EVENT_LABELS[ev] ?? ev}
+            </label>
+          ))}
+        </fieldset>
+        <fieldset>
+          <legend>ntfy</legend>
+          <label>
+            Topic URL
+            <input value={s.ntfyUrl} onChange={(e) => set({ ntfyUrl: e.target.value })} placeholder="https://ntfy.sh/my-printer" />
+          </label>
+          <label>
+            Access token <span className="sub">(optional{s.ntfyTokenSet ? "; one is saved - leave empty to keep it" : ""})</span>
+            <input type="password" value={s.ntfyToken ?? ""} onChange={(e) => set({ ntfyToken: e.target.value })} autoComplete="off" />
+          </label>
+          {s.ntfyTokenSet && (
+            <label className="check">
+              <input type="checkbox" checked={!!s.clearNtfyToken} onChange={(e) => set({ clearNtfyToken: e.target.checked })} />
+              remove the saved token
+            </label>
+          )}
+        </fieldset>
+        <fieldset>
+          <legend>Email</legend>
+          <label>
+            SMTP server
+            <input value={s.smtpHost} onChange={(e) => set({ smtpHost: e.target.value })} placeholder="smtp.example.org" />
+          </label>
+          <div className="row">
+            <label>
+              Port
+              <input
+                type="number"
+                value={s.smtpPort ?? ""}
+                onChange={(e) => set({ smtpPort: e.target.value ? Number(e.target.value) : undefined })}
+                placeholder="587"
+              />
+            </label>
+            <label>
+              Security
+              <select value={s.smtpSecurity ?? "starttls"} onChange={(e) => set({ smtpSecurity: e.target.value as NotificationSettings["smtpSecurity"] })}>
+                <option value="starttls">STARTTLS</option>
+                <option value="tls">TLS</option>
+                <option value="none">none</option>
+              </select>
+            </label>
+          </div>
+          <label>
+            Username
+            <input value={s.smtpUsername ?? ""} onChange={(e) => set({ smtpUsername: e.target.value })} autoComplete="off" />
+          </label>
+          <label>
+            Password <span className="sub">{s.smtpPasswordSet ? "(one is saved - leave empty to keep it)" : ""}</span>
+            <input type="password" value={s.smtpPassword ?? ""} onChange={(e) => set({ smtpPassword: e.target.value })} autoComplete="new-password" />
+          </label>
+          {s.smtpPasswordSet && (
+            <label className="check">
+              <input type="checkbox" checked={!!s.clearSmtpPassword} onChange={(e) => set({ clearSmtpPassword: e.target.checked })} />
+              remove the saved password
+            </label>
+          )}
+          <label>
+            From
+            <input value={s.emailFrom ?? ""} onChange={(e) => set({ emailFrom: e.target.value })} placeholder="STL Library <stl@example.org>" />
+          </label>
+          <label>
+            To <span className="sub">(comma-separated)</span>
+            <input value={s.emailTo ?? ""} onChange={(e) => set({ emailTo: e.target.value })} placeholder="me@example.org" />
+          </label>
+        </fieldset>
+        <div className="actions">
+          <button
+            type="button"
+            onClick={() => {
+              setError("");
+              setMsg("Sending…");
+              api.testNotifications(body()).then(() => setMsg("Test sent - check your phone / inbox."), fail);
+            }}
+          >
+            Send test
           </button>
           <button type="submit">Save</button>
         </div>

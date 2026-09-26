@@ -159,3 +159,10 @@ button.danger { border-color: #d33 !important; color: #d33 !important; }
 .settings input { font: inherit; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); }
 .ok { color: #2a8a3a; }
 button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.settings { margin-bottom: 28px; }
+.settings fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; }
+.settings legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
+.settings select { font: inherit; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); }
+.settings .row { display: flex; gap: 10px; }
+.settings .row label { flex: 1; }
