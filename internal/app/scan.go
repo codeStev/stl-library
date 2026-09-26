@@ -51,6 +51,7 @@ type ModelSummary struct {
 	Variants int
 	Parts    int
 	Bytes    int64
+	Cover    int64 // id of the model's first image (jpg/png/webp/gif), 0 if none
 }
 
 // ModelDetail is a model with its variants and images.

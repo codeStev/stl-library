@@ -185,7 +185,7 @@ func TestModelDetailVariantsImagesCreatorsIssues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Name != "Bell Head" || m.Category != "Enemies" || len(m.Variants) != 2 || len(m.Images) != 1 {
+	if m.Name != "Bell Head" || m.Category != "Enemies" || len(m.Variants) != 2 || len(m.Images) != 1 || m.Cover != m.Images[0].ID {
 		t.Fatalf("model: %+v", m)
 	}
 	v := m.Variants[0] // ordered by dir: "32mm/No Supports" before "32mm/Supported"

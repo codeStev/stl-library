@@ -47,6 +47,7 @@ type modelSummary struct {
 	Variants int    `json:"variants"`
 	Parts    int    `json:"parts"`
 	Bytes    int64  `json:"bytes"`
+	Cover    int64  `json:"cover,omitempty"` // image id
 }
 
 type fileRef struct {
@@ -70,7 +71,7 @@ type modelDetail struct {
 }
 
 func summary(m app.ModelSummary) modelSummary {
-	return modelSummary{m.ID, m.Creator, m.Release, m.Category, m.Name, m.Dir, m.Variants, m.Parts, m.Bytes}
+	return modelSummary{m.ID, m.Creator, m.Release, m.Category, m.Name, m.Dir, m.Variants, m.Parts, m.Bytes, m.Cover}
 }
 
 func refs(fs []app.FileRef) []fileRef {

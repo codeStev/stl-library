@@ -320,10 +320,12 @@ func ftsQuery(text string) string {
 	return strings.Join(terms, " ")
 }
 
-const summaryCols = `m.id, m.creator, m.release, m.category, m.name, m.dir, m.variants, m.parts, m.bytes`
+const summaryCols = `m.id, m.creator, m.release, m.category, m.name, m.dir, m.variants, m.parts, m.bytes,
+	coalesce((SELECT i.id FROM image i WHERE i.model_id = m.id AND (lower(i.path) LIKE '%.jpg' OR lower(i.path) LIKE '%.jpeg'
+		OR lower(i.path) LIKE '%.png' OR lower(i.path) LIKE '%.webp' OR lower(i.path) LIKE '%.gif') ORDER BY i.path LIMIT 1), 0)`
 
 func scanSummary(row interface{ Scan(...any) error }, m *app.ModelSummary) error {
-	return row.Scan(&m.ID, &m.Creator, &m.Release, &m.Category, &m.Name, &m.Dir, &m.Variants, &m.Parts, &m.Bytes)
+	return row.Scan(&m.ID, &m.Creator, &m.Release, &m.Category, &m.Name, &m.Dir, &m.Variants, &m.Parts, &m.Bytes, &m.Cover)
 }
 
 func notFound(err error) error {
