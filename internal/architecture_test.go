@@ -1,7 +1,9 @@
-// The dependency rule, enforced: the convention package is the pure
-// definition of the folder convention and must never touch I/O. (The app's
-// own hexagon - core, app/ports, adapters, cmd - is added with the app and
-// gets its rules here.)
+// The dependency rule, enforced (hexagonal):
+//   - convention: the pure, public definition of the folder convention
+//   - internal/core: the domain, pure (no I/O), may use convention
+//   - internal/app: use cases and the ports they need; no I/O, no adapters
+//   - internal/adapters: implement the ports (disk, database, HTTP)
+//   - cmd: wires adapters into use cases
 package architecture_test
 
 import (
@@ -24,6 +26,9 @@ var rules = []struct {
 	forbidden []string
 }{
 	{"../convention", append(append([]string{}, ioPackages...), module+"internal")},
+	{"core", append(append([]string{}, ioPackages...), module+"internal/app", module+"internal/adapters", module+"cmd")},
+	{"app", append(append([]string{}, ioPackages...), module+"internal/adapters", module+"cmd")},
+	{"adapters", []string{module + "cmd"}},
 }
 
 func TestLayersOnlyDependInward(t *testing.T) {
