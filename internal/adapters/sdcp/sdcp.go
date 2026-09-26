@@ -70,6 +70,15 @@ type ChunkTiming struct {
 	Send          time.Duration // until the printer acknowledged the whole request (Linux; elsewhere: until written)
 	Wait          time.Duration // from then until the printer's answer starts
 	RTT           time.Duration // the connection's smoothed round-trip time (Linux)
+	TCP           TCPStats      // what the kernel saw while sending (Linux)
+}
+
+// TCPStats of one chunk's connection, from the kernel (Linux).
+type TCPStats struct {
+	Busy, RwndLimited, SndbufLimited time.Duration // time sending; of it, limited by the printer's receive window / our buffer
+	MinWindow, MaxWindow             uint32        // the receive window the printer advertised (bytes)
+	MSS                              uint32
+	Retransmits                      uint32
 }
 
 func (p *Printer) ports() (int, int) {
@@ -471,6 +480,7 @@ func postChunk(ctx context.Context, client *http.Client, conn func() net.Conn, u
 	var mu sync.Mutex
 	var start, connected, wrote, acked, answered time.Time
 	var rtt time.Duration
+	var tcp TCPStats
 	at := func(p *time.Time) { mu.Lock(); *p = time.Now(); mu.Unlock() }
 	ackDone := make(chan struct{})
 	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
@@ -484,10 +494,10 @@ func postChunk(ctx context.Context, client *http.Client, conn func() net.Conn, u
 					return
 				}
 				if c := conn(); c != nil {
-					if r, ok := waitAcked(ctx, c); ok {
+					if r, st, ok := waitAcked(ctx, c); ok {
 						at(&acked)
 						mu.Lock()
-						rtt = r
+						rtt, tcp = r, st
 						mu.Unlock()
 					}
 				}
@@ -515,7 +525,7 @@ func postChunk(ctx context.Context, client *http.Client, conn func() net.Conn, u
 	if !acked.IsZero() && acked.Before(answered) {
 		sent = acked
 	}
-	t.Connect, t.Send, t.Wait, t.RTT = connected.Sub(start), sent.Sub(connected), answered.Sub(sent), rtt
+	t.Connect, t.Send, t.Wait, t.RTT, t.TCP = connected.Sub(start), sent.Sub(connected), answered.Sub(sent), rtt, tcp
 	mu.Unlock()
 	t.Wait = max(t.Wait, 0) // an early answer, before the body was written
 	defer resp.Body.Close()

@@ -198,7 +198,7 @@ func runPrinter(ctx context.Context, host, db string, args []string, out io.Writ
 			sp.UploadTrace = tr.chunk
 			fmt.Fprintf(out, "tracing the upload of %s (%s), chunk %s, Check=%v - no print is started\n",
 				path.Base(file), size(info.Size()), size(int64(max(chunkKB<<10, sdcp.ChunkSize))), !noCheck)
-			fmt.Fprintln(out, "  chunk  offset      connect    send     wait    network     rtt")
+			fmt.Fprintln(out, "  chunk  offset      connect    send     wait    network     rtt   rwnd-limited  window(min-max)  mss   retrans")
 		}
 		start := time.Now()
 		last := -1
@@ -298,8 +298,9 @@ type uploadTrace struct {
 
 func (t *uploadTrace) chunk(c sdcp.ChunkTiming) {
 	t.chunks = append(t.chunks, c)
-	fmt.Fprintf(t.out, "  %5d  %-10s  %7s  %7s  %7s  %-10s  %s\n", len(t.chunks), size(c.Offset),
-		ms(c.Connect), ms(c.Send), ms(c.Wait), rate(c.Bytes, c.Send), ms(c.RTT))
+	fmt.Fprintf(t.out, "  %5d  %-10s  %7s  %7s  %7s  %-10s  %5s  %12s  %15s  %4d  %d\n", len(t.chunks), size(c.Offset),
+		ms(c.Connect), ms(c.Send), ms(c.Wait), rate(c.Bytes, c.Send), ms(c.RTT), pct(c.TCP.RwndLimited, c.TCP.Busy),
+		fmt.Sprintf("%d-%d", c.TCP.MinWindow, c.TCP.MaxWindow), c.TCP.MSS, c.TCP.Retransmits)
 }
 
 func (t *uploadTrace) summary(total time.Duration) {
@@ -315,6 +316,14 @@ func (t *uploadTrace) summary(total time.Duration) {
 	fmt.Fprintf(t.out, "\n%d chunks, %s in %s = %s overall\n", len(t.chunks), size(bytes), total.Round(time.Second), rate(bytes, total))
 	fmt.Fprintf(t.out, "  connecting: %s total (%s per chunk)\n", connect.Round(time.Millisecond), ms(connect/n))
 	fmt.Fprintf(t.out, "  sending:    %s total (%s per chunk) - until the printer's network stack had it all, %s\n", send.Round(time.Millisecond), ms(send/n), rate(bytes, send))
+	var rwnd, busy time.Duration
+	var retrans uint32
+	for _, c := range t.chunks {
+		rwnd, busy, retrans = rwnd+c.TCP.RwndLimited, busy+c.TCP.Busy, retrans+c.TCP.Retransmits
+	}
+	if busy > 0 {
+		fmt.Fprintf(t.out, "              of that, %s limited by the printer's receive window; %d retransmits\n", pct(rwnd, busy), retrans)
+	}
 	fmt.Fprintf(t.out, "  waiting:    %s total (%s per chunk) - the printer handling a chunk\n", wait.Round(time.Millisecond), ms(wait/n))
 	if len(t.chunks) >= 10 {
 		first, last := avgWait(t.chunks[:5]), avgWait(t.chunks[len(t.chunks)-5:])
@@ -326,8 +335,10 @@ func (t *uploadTrace) summary(total time.Duration) {
 	switch {
 	case (send+wait)/n < 100*time.Millisecond:
 		fmt.Fprintln(t.out, "  -> fast: under 100 ms per chunk, nothing to improve here")
+	case send > 2*wait && busy > 0 && rwnd*2 > busy:
+		fmt.Fprintln(t.out, "  -> mostly sending, and the printer's receive window was full most of that time: the printer reads the data slowly - not the network")
 	case send > 2*wait:
-		fmt.Fprintln(t.out, "  -> mostly the network: the printer takes data in slowly (WiFi signal/band, its TCP window). Compare placing the PC/router closer, or a wired PC")
+		fmt.Fprintln(t.out, "  -> mostly the network: the data travels slowly (WiFi signal/band). Compare placing the router closer, or a wired connection")
 	case wait > 2*send:
 		fmt.Fprintln(t.out, "  -> mostly the printer handling each chunk (storage writes, checks): the client can't speed that up, except by avoiding per-chunk work (try --no-check)")
 	default:
@@ -350,4 +361,11 @@ func rate(b int64, d time.Duration) string {
 		return "-"
 	}
 	return fmt.Sprintf("%.2f MB/s", float64(b)/1e6/d.Seconds())
+}
+
+func pct(part, whole time.Duration) string {
+	if whole <= 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%d%%", part*100/whole)
 }
