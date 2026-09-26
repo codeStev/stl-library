@@ -167,7 +167,7 @@ printer's files, and pause/resume/stop.
 The same without the web UI (the app's binary, nothing else to install):
 
 ```
-stlib printer --host 192.168.2.35 status
+stlib printer --host 192.168.1.50 status
 stlib printer files [/local | / | /usb]
 stlib printer send model.ctb [--print]
 stlib printer print model.ctb

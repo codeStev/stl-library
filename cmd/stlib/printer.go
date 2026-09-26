@@ -60,7 +60,7 @@ func printerSettings(ctx context.Context, host, db string) (app.PrinterSettings,
 	return app.PrinterSettings{}, errors.New("no printer given: use --host, PRINTER_ADDR, or save one in the app's settings")
 }
 
-// parsePrinterAddr: "192.168.2.35" or "host:3030" (the control port).
+// parsePrinterAddr: "192.168.1.50" or "host:3030" (the control port).
 func parsePrinterAddr(addr string) app.PrinterSettings {
 	s := app.PrinterSettings{Host: addr}
 	if h, p, err := net.SplitHostPort(addr); err == nil {

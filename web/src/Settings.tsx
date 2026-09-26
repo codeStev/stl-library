@@ -46,7 +46,7 @@ function PrinterSection() {
       >
         <label>
           Address (IP or host name)
-          <input value={s.host} onChange={(e) => setS({ ...s, host: e.target.value })} placeholder="192.168.2.35" />
+          <input value={s.host} onChange={(e) => setS({ ...s, host: e.target.value })} placeholder="192.168.1.50" />
         </label>
         <label>
           Control port <span className="sub">(default 3030)</span>
