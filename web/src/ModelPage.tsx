@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { api, DIM_VALUES, displayName, formatBytes, formatDate, type DimKey, type FileRef, type ModelDetail, type Variant } from "./api";
+import { api, DIM_VALUES, displayName, formatBytes, formatDate, printable, type DimKey, type FileRef, type ModelDetail, type Variant } from "./api";
 
 // three.js is large; it loads only when a 3D view is opened.
 const Viewer = lazy(() => import("./Viewer"));
@@ -196,6 +196,7 @@ export function ModelPage({ id }: { id: number }) {
                   <li key={p.id}>
                     <a href={api.partURL(p.id)}>{p.name}</a>
                     <span>
+                      {printable(p.name) && <SendToPrinter part={p} />}
                       {viewable(p.name) && (
                         <button className="view3d" onClick={() => setViewing(p)}>
                           3D
@@ -369,5 +370,44 @@ function LabelEditor({ variant, act }: { variant: Variant; act: Act }) {
         </button>
       </div>
     </form>
+  );
+}
+
+// SendToPrinter sends a sliced file (.ctb/.goo) to the printer: upload and
+// start, or only upload.
+function SendToPrinter({ part }: { part: FileRef }) {
+  const [open, setOpen] = useState(false);
+  const [msg, setMsg] = useState("");
+  const go = (start: boolean) =>
+    api.sendToPrinter(part.id, start).then(
+      () => (setOpen(false), setMsg(start ? "sending, then printing" : "sending")),
+      (e) => setMsg(`not sent: ${e instanceof Error ? e.message : e}`),
+    );
+  if (msg) {
+    return (
+      <span className="print-msg">
+        {msg} — <a href="#/printer">printer</a>
+      </span>
+    );
+  }
+  if (!open) {
+    return (
+      <button className="view3d" onClick={() => setOpen(true)}>
+        Print
+      </button>
+    );
+  }
+  return (
+    <span className="print-choice">
+      <button className="small" onClick={() => go(true)}>
+        Upload &amp; start
+      </button>
+      <button className="small" onClick={() => go(false)}>
+        Upload only
+      </button>
+      <button className="small" onClick={() => setOpen(false)}>
+        Cancel
+      </button>
+    </span>
   );
 }

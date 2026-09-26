@@ -138,3 +138,24 @@ button.link { background: none; border: none; color: var(--muted); cursor: point
 .imports li { padding: 6px 0; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; align-items: flex-start; }
 .imports .reason { color: var(--muted); }
 button.small { font-size: 12px; padding: 2px 10px; border-radius: 6px; border: 1px solid var(--accent); background: none; color: var(--accent); cursor: pointer; }
+
+.printer-card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
+.printer-card h2 { font-size: 18px; margin: 0 0 4px; }
+.machine { font-size: 12px; font-weight: normal; padding: 2px 8px; border-radius: 999px; background: var(--line); margin-left: 6px; vertical-align: middle; }
+.machine.printing { background: var(--accent); color: var(--accent-text); }
+.machine.offline { background: #d33; color: #fff; }
+.job { margin-top: 10px; }
+.job-title { font-weight: 600; margin-bottom: 6px; }
+.progress { height: 10px; background: var(--line); border-radius: 999px; overflow: hidden; margin: 6px 0; }
+.progress div { height: 100%; background: var(--accent); transition: width 0.5s; }
+.printer .actions { margin-top: 10px; }
+.printer .actions button, .settings .actions button { font-size: 14px; padding: 7px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; }
+button.danger { border-color: #d33 !important; color: #d33 !important; }
+.file-actions { display: flex; gap: 6px; align-items: center; }
+.print-choice { display: inline-flex; gap: 4px; margin-right: 8px; }
+.print-msg { font-size: 12px; margin-right: 8px; color: var(--muted); }
+.settings form { display: flex; flex-direction: column; gap: 12px; max-width: 420px; }
+.settings label { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.settings input { font: inherit; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); }
+.ok { color: #2a8a3a; }
+button:disabled { opacity: 0.4; cursor: not-allowed; }

@@ -43,6 +43,48 @@ export interface Variant {
   relabeled?: boolean;
 }
 
+export interface PrinterJob {
+  file: string;
+  state: string;
+  layer: number;
+  layers: number;
+  progress: number;
+  elapsedMs: number;
+  remainingMs: number;
+  error?: string;
+}
+
+export interface PrinterState {
+  enabled: boolean;
+  status?: { name: string; firmware?: string; machine: string; uvTemp?: number; job?: PrinterJob };
+  transfer?: { partId: number; file: string; size: number; sent: number; start: boolean; state: string; error?: string };
+}
+
+export interface PrinterFile {
+  path: string;
+  folder?: boolean;
+  size?: number;
+  used?: number;
+  total?: number;
+}
+
+export interface PrinterSettings {
+  host: string;
+  controlPort?: number;
+  discoveryPort?: number;
+  source?: "saved" | "default" | "none";
+}
+
+export const printable = (name: string) => /\.(ctb|goo)$/i.test(name);
+
+export function formatDuration(ms: number): string {
+  const s = Math.round(ms / 1000);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  if (h > 0) return `${h} h ${m} min`;
+  if (m > 0) return `${m} min`;
+  return `${s} s`;
+}
+
 export interface ImportRecord {
   source: string;
   state: "existing" | "waiting" | "queued" | "imported" | "failed";
@@ -147,6 +189,17 @@ export const api = {
   setLabel: (variantId: number, dims: Partial<Record<DimKey, string>>, option: string) =>
     send("PUT", `/api/variants/${variantId}/label`, { dims, option }),
   resetLabel: (variantId: number) => send("DELETE", `/api/variants/${variantId}/label`),
+  printer: () => get<PrinterState>("/api/printer"),
+  sendToPrinter: (partId: number, start: boolean) => send("POST", `/api/parts/${partId}/print`, { start }),
+  printerControl: (action: "pause" | "resume" | "stop") => send("POST", `/api/printer/${action}`, {}),
+  cancelTransfer: () => send("DELETE", "/api/printer/transfer"),
+  printerFiles: (dir = "/local") => get<PrinterFile[]>(`/api/printer/files?dir=${encodeURIComponent(dir)}`),
+  printExisting: (path: string) => send("POST", "/api/printer/files/print", { path }),
+  deletePrinterFiles: (paths: string[]) => send("POST", "/api/printer/files/delete", { paths }),
+  printerSettings: () => get<PrinterSettings>("/api/settings/printer"),
+  savePrinterSettings: (s: PrinterSettings) => send("PUT", "/api/settings/printer", s),
+  testPrinterSettings: (s: PrinterSettings) =>
+    send<{ ok: boolean; machine: string; name?: string; firmware?: string }>("POST", "/api/settings/printer/test", s),
   imports: () => get<{ enabled: boolean; records: ImportRecord[] }>("/api/imports"),
   requestImport: (source: string) => send("POST", "/api/imports/request", { source }),
   enqueue: (variantId: number, note = "") => send("PUT", `/api/variants/${variantId}/queue`, { note }),
