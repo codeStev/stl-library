@@ -29,7 +29,7 @@ Commands:
   send <file> --trace [--max-chunks N] [--no-check] [--chunk-kb N]
                        upload only (never prints) and show where the time
                        goes per chunk: network vs. the printer. --max-chunks
-                       stops early (the printer discards the partial file);
+                       stops early (and removes the partial file);
                        --no-check and --chunk-kb try non-standard variants
   print <name>         start a file already on the printer
   rm <name>...         delete files from the printer
@@ -213,7 +213,7 @@ func runPrinter(ctx context.Context, host, db string, args []string, out io.Writ
 		})
 		fmt.Fprintln(out)
 		if errors.Is(err, sdcp.ErrStoppedEarly) {
-			fmt.Fprintf(out, "stopped after %d chunks, as asked (the printer discards the incomplete file)\n", maxChunks)
+			fmt.Fprintf(out, "stopped after %d chunks, as asked; removed the partial file from the printer\n", maxChunks)
 			tr.summary(time.Since(start))
 			return nil
 		}
@@ -297,6 +297,9 @@ type uploadTrace struct {
 }
 
 func (t *uploadTrace) chunk(c sdcp.ChunkTiming) {
+	if len(t.chunks) == 0 {
+		fmt.Fprintf(t.out, "  (transfer %s; an interrupted one stays on the printer as %s)\n", c.Transfer, sdcp.PartialName(c.Transfer, "<name>"))
+	}
 	t.chunks = append(t.chunks, c)
 	fmt.Fprintf(t.out, "  %5d  %-10s  %7s  %7s  %7s  %-10s  %5s  %12s  %15s  %4d  %d\n", len(t.chunks), size(c.Offset),
 		ms(c.Connect), ms(c.Send), ms(c.Wait), rate(c.Bytes, c.Send), ms(c.RTT), pct(c.TCP.RwndLimited, c.TCP.Busy),

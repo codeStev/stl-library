@@ -207,7 +207,23 @@ func TestUploadStopsEarlyWhenAsked(t *testing.T) {
 	p.UploadTrace = func(ChunkTiming) { chunks++ }
 	data := make([]byte, 5*ChunkSize)
 	err := p.Upload(context.Background(), "early.ctb", int64(len(data)), opener(data), func(int64) {})
-	if !errors.Is(err, ErrStoppedEarly) || chunks != 2 || m.Files()["/local/early.ctb"] != 0 {
-		t.Errorf("err %v, %d chunks, stored %d", err, chunks, m.Files()["/local/early.ctb"])
+	if !errors.Is(err, ErrStoppedEarly) || chunks != 2 || len(m.Files()) != 0 {
+		t.Errorf("err %v, %d chunks, files left %v", err, chunks, m.Files())
+	}
+}
+
+func TestAFailedUploadRemovesItsPartialFile(t *testing.T) {
+	m, p := mockPrinter(t)
+	m.AddFile("/local/keep.ctb", []byte("someone else's file"))
+	data := make([]byte, 3*ChunkSize)
+	ctx, cancel := context.WithCancel(context.Background())
+	err := p.Upload(ctx, "cancel.ctb", int64(len(data)), opener(data), func(n int64) {
+		if n >= ChunkSize {
+			cancel() // like "cancel transfer" in the app
+		}
+	})
+	files := m.Files()
+	if err == nil || len(files) != 1 || files["/local/keep.ctb"] == 0 {
+		t.Errorf("err %v, files %v", err, files)
 	}
 }

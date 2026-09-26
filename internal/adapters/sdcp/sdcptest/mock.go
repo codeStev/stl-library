@@ -403,10 +403,15 @@ func (m *Mock) serveUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	u.data = append(u.data, chunk...)
 	u.offset += int64(len(chunk))
+	// Like the real printer, an unfinished transfer is a file of its own,
+	// "<first 32 of Uuid>_<name>", left behind if the transfer stops.
+	partial := "/local/" + u.uuid[:min(32, len(u.uuid))] + "_" + u.name
 	if u.offset < u.total {
+		m.files[partial] = u.data
 		m.reply(w, 200, true, "")
 		return
 	}
+	delete(m.files, partial)
 	m.upload = nil
 	sum := md5.Sum(u.data)
 	if hex.EncodeToString(sum[:]) != u.md5 || u.offset != u.total {

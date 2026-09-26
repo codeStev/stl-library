@@ -39,8 +39,8 @@ type Printer struct {
 	// values are what the protocol specifies.
 	UploadChunk   int  // bytes per chunk; ChunkSize when 0
 	UploadNoCheck bool // send Check=0 (no MD5 verification by the printer)
-	// UploadMaxChunks stops after that many chunks (0 = all), leaving an
-	// incomplete transfer the printer discards: for timing experiments.
+	// UploadMaxChunks stops after that many chunks (0 = all), for timing
+	// experiments; the partial file is removed.
 	UploadMaxChunks int
 	// UploadTrace, if set, receives the timing of every chunk. On Linux
 	// the kernel tells when the printer has acknowledged all of a chunk,
@@ -71,6 +71,7 @@ type ChunkTiming struct {
 	Wait          time.Duration // from then until the printer's answer starts
 	RTT           time.Duration // the connection's smoothed round-trip time (Linux)
 	TCP           TCPStats      // what the kernel saw while sending (Linux)
+	Transfer      string        // the transfer's Uuid
 }
 
 // TCPStats of one chunk's connection, from the kernel (Linux).
@@ -437,6 +438,27 @@ func (p *Printer) Upload(ctx context.Context, name string, size int64, open func
 	}
 	buf := make([]byte, chunk)
 	var offset int64
+	err = p.sendChunks(ctx, client, conn, url, name, uuid, sum, check, r, buf, size, &offset, progress)
+	if err != nil && offset > 0 {
+		// The printer keeps an interrupted transfer as "<id>_<name>";
+		// remove ours (and only ours). Also after a cancel, so without ctx.
+		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		defer cancel()
+		if derr := p.Delete(dctx, []string{PartialName(uuid, name)}); derr != nil {
+			err = fmt.Errorf("%w (and the partial file %s could not be removed: %v)", err, PartialName(uuid, name), derr)
+		}
+	}
+	return err
+}
+
+// PartialName is what the printer calls an interrupted transfer's file.
+func PartialName(uuid, name string) string { return uuid[:32] + "_" + name }
+
+func (p *Printer) sendChunks(ctx context.Context, client *http.Client, conn func() net.Conn, url, name, uuid, sum, check string,
+	r io.Reader, buf []byte, size int64, offsetp *int64, progress func(int64)) error {
+	chunk := len(buf)
+	offset := *offsetp
+	defer func() { *offsetp = offset }()
 	for offset < size || offset == 0 {
 		n, err := io.ReadFull(r, buf)
 		if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !(errors.Is(err, io.EOF) && size == 0) {
@@ -444,7 +466,7 @@ func (p *Printer) Upload(ctx context.Context, name string, size int64, open func
 		}
 		ok, msg, t, err := postChunk(ctx, client, conn, url, name, uuid, sum, check, offset, size, buf[:n])
 		if p.UploadTrace != nil && err == nil {
-			t.Offset, t.Bytes = offset, int64(n)
+			t.Offset, t.Bytes, t.Transfer = offset, int64(n), uuid
 			p.UploadTrace(t)
 		}
 		if err != nil {
