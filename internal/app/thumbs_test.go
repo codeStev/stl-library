@@ -3,11 +3,14 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"image"
 	"image/jpeg"
 	"image/png"
 	"io"
 	"testing"
+
+	"github.com/codeStev/stl-library/convention"
 )
 
 type imgStore struct{ Store }
@@ -64,5 +67,63 @@ func TestWarmCoversMakesMissingThumbnailsOnce(t *testing.T) {
 	}
 	if made, _ := th.WarmCovers(context.Background()); made != 0 {
 		t.Errorf("second warm made %d", made)
+	}
+}
+
+func TestRenderPartPrefersOnePieceThenUnsupportedThenAnything(t *testing.T) {
+	v := func(sup, split string, parts ...FileRef) VariantDetail {
+		return VariantDetail{Dims: convention.Dims{Supports: sup, Split: split}, Parts: parts}
+	}
+	f := func(p string, size int64) FileRef { return FileRef{Path: p, Size: size} }
+	cases := []struct {
+		m    ModelDetail
+		want string
+	}{
+		{ModelDetail{Variants: []VariantDetail{
+			v("Supported", "", f("s/body.stl", 900)),
+			v("No Supports", "", f("n/arm.stl", 50), f("n/body.stl", 300)),
+			v("", "Combined", f("c/whole.stl", 100)),
+		}}, "c/whole.stl"},
+		{ModelDetail{Variants: []VariantDetail{
+			v("Supported", "", f("s/body.stl", 900)),
+			v("No Supports", "", f("n/arm.stl", 50), f("n/body.stl", 300), f("n/big.lys", 5000)),
+		}}, "n/body.stl"},
+		{ModelDetail{Variants: []VariantDetail{v("Supported", "", f("s/a.stl", 1), f("s/b.STL", 2))}}, "s/b.STL"},
+		{ModelDetail{Variants: []VariantDetail{v("Supported", "", f("s/a.lys", 1))}}, ""},
+	}
+	for i, c := range cases {
+		got := RenderPart(&c.m)
+		switch {
+		case c.want == "" && got != nil:
+			t.Errorf("%d: got %s, want none", i, got.Path)
+		case c.want != "" && (got == nil || got.Path != c.want):
+			t.Errorf("%d: got %v, want %s", i, got, c.want)
+		}
+	}
+}
+
+type renderStore struct{ Store }
+
+func (renderStore) Model(context.Context, int64) (*ModelDetail, error) {
+	return &ModelDetail{Variants: []VariantDetail{{Parts: []FileRef{{Path: "C/M/tri.stl", Size: 134}}}}}, nil
+}
+
+func TestModelPreviewFallsBackToARenderedSTL(t *testing.T) {
+	// One binary-STL triangle.
+	var stl bytes.Buffer
+	stl.Write(make([]byte, 80))
+	binary.Write(&stl, binary.LittleEndian, uint32(1))
+	binary.Write(&stl, binary.LittleEndian, [12]float32{0, 0, 0, 0, 0, 0, 10, 0, 0, 0, 0, 10})
+	stl.Write([]byte{0, 0})
+	th := NewThumbs(renderStore{}, &countingFiles{data: stl.Bytes()}, memCache{})
+	data, ct, err := th.Model(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ct != "image/png" {
+		t.Errorf("content type %q", ct)
+	}
+	if _, err := png.Decode(bytes.NewReader(data)); err != nil {
+		t.Errorf("not a PNG: %v", err)
 	}
 }

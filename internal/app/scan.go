@@ -52,6 +52,8 @@ type ModelSummary struct {
 	Parts    int
 	Bytes    int64
 	Cover    int64 // id of the model's first image (jpg/png/webp/gif), 0 if none
+	// Renderable: the model has an STL a preview can be rendered from.
+	Renderable bool
 }
 
 // ModelDetail is a model with its variants and images.

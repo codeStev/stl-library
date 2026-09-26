@@ -322,10 +322,11 @@ func ftsQuery(text string) string {
 
 const summaryCols = `m.id, m.creator, m.release, m.category, m.name, m.dir, m.variants, m.parts, m.bytes,
 	coalesce((SELECT i.id FROM image i WHERE i.model_id = m.id AND (lower(i.path) LIKE '%.jpg' OR lower(i.path) LIKE '%.jpeg'
-		OR lower(i.path) LIKE '%.png' OR lower(i.path) LIKE '%.webp' OR lower(i.path) LIKE '%.gif') ORDER BY i.path LIMIT 1), 0)`
+		OR lower(i.path) LIKE '%.png' OR lower(i.path) LIKE '%.webp' OR lower(i.path) LIKE '%.gif') ORDER BY i.path LIMIT 1), 0),
+	EXISTS (SELECT 1 FROM variant v JOIN part p ON p.variant_id = v.id WHERE v.model_id = m.id AND lower(p.path) LIKE '%.stl')`
 
 func scanSummary(row interface{ Scan(...any) error }, m *app.ModelSummary) error {
-	return row.Scan(&m.ID, &m.Creator, &m.Release, &m.Category, &m.Name, &m.Dir, &m.Variants, &m.Parts, &m.Bytes, &m.Cover)
+	return row.Scan(&m.ID, &m.Creator, &m.Release, &m.Category, &m.Name, &m.Dir, &m.Variants, &m.Parts, &m.Bytes, &m.Cover, &m.Renderable)
 }
 
 func notFound(err error) error {
