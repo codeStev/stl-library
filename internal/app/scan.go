@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"errors"
 
+	"github.com/codeStev/stl-library/convention"
 	"github.com/codeStev/stl-library/internal/core/library"
 )
 
@@ -12,7 +14,16 @@ import (
 type Store interface {
 	Sync(ctx context.Context, models []*library.Model, issues []library.Issue) (SyncStats, error)
 	Search(ctx context.Context, q Query) ([]ModelSummary, error)
+	Model(ctx context.Context, id int64) (*ModelDetail, error)
+	Creators(ctx context.Context) ([]CreatorCount, error)
+	Issues(ctx context.Context) ([]library.Issue, error)
+	Variant(ctx context.Context, id int64) (*VariantDetail, error)
+	Image(ctx context.Context, id int64) (*FileRef, error)
+	Part(ctx context.Context, id int64) (*FileRef, error)
 }
+
+// ErrNotFound is returned by a Store for an unknown id.
+var ErrNotFound = errors.New("not found")
 
 // SyncStats counts what a sync changed.
 type SyncStats struct {
@@ -26,6 +37,7 @@ type Query struct {
 	Text    string
 	Creator string
 	Limit   int
+	Offset  int
 }
 
 // ModelSummary is one search hit.
@@ -39,6 +51,36 @@ type ModelSummary struct {
 	Variants int
 	Parts    int
 	Bytes    int64
+}
+
+// ModelDetail is a model with its variants and images.
+type ModelDetail struct {
+	ModelSummary
+	Variants []VariantDetail
+	Images   []FileRef
+}
+
+// VariantDetail is one variant with its part files.
+type VariantDetail struct {
+	ID      int64
+	ModelID int64
+	Dims    convention.Dims
+	Option  string
+	Dir     string
+	Parts   []FileRef
+}
+
+// FileRef is a file of the library by id and path.
+type FileRef struct {
+	ID   int64
+	Path string
+	Size int64
+}
+
+// CreatorCount is a creator with its number of models.
+type CreatorCount struct {
+	Name   string
+	Models int
 }
 
 // Scan reads the library and brings the index up to date.

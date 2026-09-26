@@ -174,3 +174,51 @@ func TestReopeningKeepsTheSchemaAndData(t *testing.T) {
 		t.Errorf("models after reopen: %d", count(t, s, "model"))
 	}
 }
+
+func TestModelDetailVariantsImagesCreatorsIssues(t *testing.T) {
+	s, ctx := open(t), context.Background()
+	if _, err := sync(s, libraryV1...); err != nil {
+		t.Fatal(err)
+	}
+	hits, _ := s.Search(ctx, app.Query{Text: "bell", Limit: 1})
+	m, err := s.Model(ctx, hits[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Name != "Bell Head" || m.Category != "Enemies" || len(m.Variants) != 2 || len(m.Images) != 1 {
+		t.Fatalf("model: %+v", m)
+	}
+	v := m.Variants[0] // ordered by dir: "32mm/No Supports" before "32mm/Supported"
+	if v.Dims.Scale != "32mm" || v.Dims.Supports != "No Supports" || len(v.Parts) != 1 || v.Parts[0].Size != 10 || v.ModelID != m.ID {
+		t.Errorf("variant: %+v", v)
+	}
+	img, err := s.Image(ctx, m.Images[0].ID)
+	if err != nil || img.Path != "Loot Studios/Abyssal Haze/Enemies/Bell Head/cover.jpg" {
+		t.Errorf("image: %+v %v", img, err)
+	}
+	if p, err := s.Part(ctx, v.Parts[0].ID); err != nil || p.Path != "Loot Studios/Abyssal Haze/Enemies/Bell Head/32mm/No Supports/bell.stl" {
+		t.Errorf("part: %+v %v", p, err)
+	}
+	for _, f := range []func() error{
+		func() error { _, err := s.Part(ctx, 9999); return err },
+		func() error { _, err := s.Model(ctx, 9999); return err },
+		func() error { _, err := s.Variant(ctx, 9999); return err },
+		func() error { _, err := s.Image(ctx, 9999); return err },
+	} {
+		if err := f(); err != app.ErrNotFound {
+			t.Errorf("unknown id: err = %v", err)
+		}
+	}
+	cs, _ := s.Creators(ctx)
+	if len(cs) != 2 || cs[0].Name != "Artisan Guild" || cs[1].Models != 2 {
+		t.Errorf("creators: %+v", cs)
+	}
+	is, _ := s.Issues(ctx)
+	if len(is) != 1 || is[0].Dir != "Lord of the Print/Unchained/Araki/Presupported" {
+		t.Errorf("issues: %+v", is)
+	}
+	page2, _ := s.Search(ctx, app.Query{Creator: "Loot Studios", Limit: 1, Offset: 1})
+	if len(page2) != 1 || page2[0].Name != "Élise the Brave" {
+		t.Errorf("offset: %+v", page2)
+	}
+}

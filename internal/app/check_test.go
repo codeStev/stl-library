@@ -36,6 +36,7 @@ func TestCheckPassesListingErrorsOn(t *testing.T) {
 }
 
 type fakeStore struct {
+	Store  // unused methods panic
 	synced []*library.Model
 	query  Query
 }

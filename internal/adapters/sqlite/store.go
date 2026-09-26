@@ -5,6 +5,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -284,12 +285,12 @@ func (s *Store) Search(ctx context.Context, q app.Query) ([]app.ModelSummary, er
 		where = append(where, `m.creator = ?`)
 		args = append(args, q.Creator)
 	}
-	query := `SELECT m.id, m.creator, m.release, m.category, m.name, m.dir, m.variants, m.parts, m.bytes FROM ` + from
+	query := `SELECT ` + summaryCols + ` FROM ` + from
 	if len(where) > 0 {
 		query += ` WHERE ` + strings.Join(where, ` AND `)
 	}
-	query += ` ORDER BY ` + order + ` LIMIT ?`
-	args = append(args, q.Limit)
+	query += ` ORDER BY ` + order + ` LIMIT ? OFFSET ?`
+	args = append(args, q.Limit, q.Offset)
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -298,7 +299,7 @@ func (s *Store) Search(ctx context.Context, q app.Query) ([]app.ModelSummary, er
 	var out []app.ModelSummary
 	for rows.Next() {
 		var m app.ModelSummary
-		if err := rows.Scan(&m.ID, &m.Creator, &m.Release, &m.Category, &m.Name, &m.Dir, &m.Variants, &m.Parts, &m.Bytes); err != nil {
+		if err := scanSummary(rows, &m); err != nil {
 			return nil, err
 		}
 		out = append(out, m)
@@ -317,4 +318,139 @@ func ftsQuery(text string) string {
 		terms = append(terms, `"`+w+`"*`)
 	}
 	return strings.Join(terms, " ")
+}
+
+const summaryCols = `m.id, m.creator, m.release, m.category, m.name, m.dir, m.variants, m.parts, m.bytes`
+
+func scanSummary(row interface{ Scan(...any) error }, m *app.ModelSummary) error {
+	return row.Scan(&m.ID, &m.Creator, &m.Release, &m.Category, &m.Name, &m.Dir, &m.Variants, &m.Parts, &m.Bytes)
+}
+
+func notFound(err error) error {
+	if errors.Is(err, sql.ErrNoRows) {
+		return app.ErrNotFound
+	}
+	return err
+}
+
+// Model returns a model with its variants (parts included) and images.
+func (s *Store) Model(ctx context.Context, id int64) (*app.ModelDetail, error) {
+	var m app.ModelDetail
+	if err := scanSummary(s.db.QueryRowContext(ctx, `SELECT `+summaryCols+` FROM model m WHERE m.id = ?`, id), &m.ModelSummary); err != nil {
+		return nil, notFound(err)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM variant WHERE model_id = ? ORDER BY dir`, id)
+	if err != nil {
+		return nil, err
+	}
+	var ids []int64
+	for rows.Next() {
+		var vid int64
+		if err := rows.Scan(&vid); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, vid)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, vid := range ids {
+		v, err := s.Variant(ctx, vid)
+		if err != nil {
+			return nil, err
+		}
+		m.Variants = append(m.Variants, *v)
+	}
+	if m.Images, err = s.files(ctx, `SELECT id, path, size FROM image WHERE model_id = ? ORDER BY path`, id); err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+// Variant returns one variant with its parts.
+func (s *Store) Variant(ctx context.Context, id int64) (*app.VariantDetail, error) {
+	v := app.VariantDetail{ID: id}
+	d := &v.Dims
+	err := s.db.QueryRowContext(ctx, `SELECT model_id, dir, option, scale, supports, density, format, fill, split, tech, extra FROM variant WHERE id = ?`, id).
+		Scan(&v.ModelID, &v.Dir, &v.Option, &d.Scale, &d.Supports, &d.Density, &d.Format, &d.Fill, &d.Split, &d.Tech, &d.Extra)
+	if err != nil {
+		return nil, notFound(err)
+	}
+	if v.Parts, err = s.files(ctx, `SELECT id, path, size FROM part WHERE variant_id = ? ORDER BY path`, id); err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func (s *Store) files(ctx context.Context, query string, id int64) ([]app.FileRef, error) {
+	rows, err := s.db.QueryContext(ctx, query, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []app.FileRef
+	for rows.Next() {
+		var f app.FileRef
+		if err := rows.Scan(&f.ID, &f.Path, &f.Size); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// Image returns one image of a model.
+func (s *Store) Image(ctx context.Context, id int64) (*app.FileRef, error) {
+	f := app.FileRef{ID: id}
+	if err := s.db.QueryRowContext(ctx, `SELECT path, size FROM image WHERE id = ?`, id).Scan(&f.Path, &f.Size); err != nil {
+		return nil, notFound(err)
+	}
+	return &f, nil
+}
+
+// Part returns one part file.
+func (s *Store) Part(ctx context.Context, id int64) (*app.FileRef, error) {
+	f := app.FileRef{ID: id}
+	if err := s.db.QueryRowContext(ctx, `SELECT path, size FROM part WHERE id = ?`, id).Scan(&f.Path, &f.Size); err != nil {
+		return nil, notFound(err)
+	}
+	return &f, nil
+}
+
+// Creators lists every creator with its number of models.
+func (s *Store) Creators(ctx context.Context) ([]app.CreatorCount, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT creator, count(*) FROM model GROUP BY creator ORDER BY creator`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []app.CreatorCount
+	for rows.Next() {
+		var c app.CreatorCount
+		if err := rows.Scan(&c.Name, &c.Models); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// Issues lists the folders that don't follow the convention.
+func (s *Store) Issues(ctx context.Context) ([]library.Issue, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT dir, reason FROM issue ORDER BY dir`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []library.Issue
+	for rows.Next() {
+		var i library.Issue
+		if err := rows.Scan(&i.Dir, &i.Reason); err != nil {
+			return nil, err
+		}
+		out = append(out, i)
+	}
+	return out, rows.Err()
 }
