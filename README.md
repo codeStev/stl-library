@@ -298,3 +298,7 @@ go build ./cmd/stlib
 Without the UI build, `go build` still works; the server then says the UI
 isn't included. For UI work, `npm run dev` in `web/` proxies `/api` to a
 `stlib serve` on `127.0.0.1:8080`.
+
+## License
+
+MIT - see [`LICENSE`](LICENSE).
