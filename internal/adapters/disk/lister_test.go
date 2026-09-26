@@ -43,3 +43,21 @@ func TestListsFilesSkippingUnderscoreFoldersAndHiddenFiles(t *testing.T) {
 		t.Errorf("got\n%s\nwant\n%s", strings.Join(got, "\n"), want)
 	}
 }
+
+func TestFilesOpensInsideTheRootOnly(t *testing.T) {
+	root := t.TempDir()
+	os.MkdirAll(filepath.Join(root, "C/M"), 0o755)
+	os.WriteFile(filepath.Join(root, "C/M/a.stl"), []byte("abc"), 0o644)
+	os.WriteFile(filepath.Join(filepath.Dir(root), "secret.txt"), []byte("no"), 0o644)
+	f := Files{Root: root}
+	r, err := f.Open(context.Background(), "C/M/a.stl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+	for _, bad := range []string{"../secret.txt", "C/../../secret.txt", "/etc/passwd", "C//M/a.stl", "", `C\M\a.stl`} {
+		if _, err := f.Open(context.Background(), bad); err != ErrOutsideRoot {
+			t.Errorf("%q: err = %v, want ErrOutsideRoot", bad, err)
+		}
+	}
+}
