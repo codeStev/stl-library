@@ -1,5 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
-import { api, formatBytes, type DimKey, type ModelDetail, type Variant } from "./api";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { api, formatBytes, type DimKey, type FileRef, type ModelDetail, type Variant } from "./api";
+
+// three.js is large; it loads only when a 3D view is opened.
+const Viewer = lazy(() => import("./Viewer"));
+const viewable = (name: string) => /\.(stl|obj|3mf)$/i.test(name);
 
 type Key = DimKey | "option";
 const KEYS: { key: Key; label: string }[] = [
@@ -34,6 +38,8 @@ export function ModelPage({ id }: { id: number }) {
   const [sel, setSel] = useState<Variant | null>(null);
   const [image, setImage] = useState(0);
   const [error, setError] = useState("");
+  const [viewing, setViewing] = useState<FileRef | null>(null);
+  const closeViewer = useCallback(() => setViewing(null), []);
 
   useEffect(() => {
     setM(null);
@@ -141,7 +147,14 @@ export function ModelPage({ id }: { id: number }) {
                 {sel.parts.map((p) => (
                   <li key={p.id}>
                     <a href={api.partURL(p.id)}>{p.name}</a>
-                    <span>{formatBytes(p.size)}</span>
+                    <span>
+                      {viewable(p.name) && (
+                        <button className="view3d" onClick={() => setViewing(p)}>
+                          3D
+                        </button>
+                      )}
+                      {formatBytes(p.size)}
+                    </span>
                   </li>
                 ))}
               </ul>
@@ -152,6 +165,11 @@ export function ModelPage({ id }: { id: number }) {
         </section>
       </div>
       <p className="path">{m.dir}</p>
+      {viewing && (
+        <Suspense fallback={<div className="viewer viewer-status">Loading viewer…</div>}>
+          <Viewer url={api.partURL(viewing.id)} name={viewing.name} size={viewing.size} onClose={closeViewer} />
+        </Suspense>
+      )}
     </div>
   );
 }

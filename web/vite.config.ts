@@ -5,6 +5,7 @@ import react from "@vitejs/plugin-react";
 // go to a running `stlib serve`.
 export default defineConfig({
   plugins: [react()],
-  build: { outDir: "../internal/adapters/web/dist", emptyOutDir: true },
+  // The 3D viewer chunk (three.js) is ~600 kB and loads only when opened.
+  build: { outDir: "../internal/adapters/web/dist", emptyOutDir: true, chunkSizeWarningLimit: 700 },
   server: { proxy: { "/api": "http://127.0.0.1:8080" } },
 });
