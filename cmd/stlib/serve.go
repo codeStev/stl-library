@@ -28,6 +28,7 @@ type importConfig struct {
 	source string
 	settle time.Duration
 	every  time.Duration
+	delete bool // remove imported folders from the downloads
 }
 
 // serve runs the API and rescans the library every interval (and imports
@@ -82,7 +83,8 @@ func serve(ctx context.Context, root, data, listen string, every time.Duration, 
 	rescan := make(chan struct{}, 1)
 	var importer *app.Importer
 	if imp != nil {
-		importer = &app.Importer{Downloads: disk.Downloads{Root: imp.source}, Library: disk.LibraryWriter{Root: root}, Log: store, Settle: imp.settle}
+		importer = &app.Importer{Downloads: disk.Downloads{Root: imp.source}, Library: disk.LibraryWriter{Root: root}, Log: store, Settle: imp.settle,
+			DeleteImported: imp.delete}
 		api.Importer = importer
 		go importLoop(ctx, importer, notifications, imp.every, rescan)
 	}
@@ -118,7 +120,7 @@ func importLoop(ctx context.Context, im *app.Importer, notes *app.Notifications,
 		case err != nil:
 			slog.Error("import failed", "err", err)
 		case sum.Imported+sum.Failed+sum.Baselined > 0 || sum.Files > 0:
-			slog.Info("import done", "took", time.Since(start).Round(time.Second), "imported", sum.Imported, "files", sum.Files,
+			slog.Info("import done", "took", time.Since(start).Round(time.Second), "imported", sum.Imported, "files", sum.Files, "removed", sum.Removed,
 				"waiting", sum.Waiting, "failed", sum.Failed, "recorded as already there", sum.Baselined)
 		}
 		if sum.Imported > 0 {

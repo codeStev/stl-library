@@ -2,13 +2,18 @@
 #
 #   docker compose -f docker-compose.yml -f docker-compose.import.yml up -d
 #
-# The library then has to be writable (the importer only ever adds new
-# files); the downloads folder stays read-only.
+# (or put COMPOSE_FILE=docker-compose.yml:docker-compose.import.yml into
+# .env). The library then has to be writable (the importer only ever adds
+# new files). The downloads folder is writable too, so that imported
+# folders can be removed from it with IMPORT_DELETE=true (only after every
+# file is verified in the library); with IMPORT_DELETE=false it is only
+# read.
 
 services:
   stl-library:
     environment:
       IMPORT_SOURCE: /downloads
+      IMPORT_DELETE: ${IMPORT_DELETE:-false}
     volumes:
       - ${LIBRARY_PATH:?set LIBRARY_PATH in .env}:/library
-      - ${IMPORT_PATH:?set IMPORT_PATH in .env}:/downloads:ro
+      - ${IMPORT_PATH:?set IMPORT_PATH in .env}:/downloads

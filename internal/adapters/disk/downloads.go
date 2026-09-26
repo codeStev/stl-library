@@ -3,6 +3,8 @@ package disk
 import (
 	"archive/zip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -10,13 +12,14 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/codeStev/stl-library/internal/core/importer"
 )
 
 // Downloads reads a downloads folder, looking into zip archives. It only
-// reads.
+// reads, except for Remove (imported folders, when asked to).
 type Downloads struct {
 	Root string
 }
@@ -166,6 +169,40 @@ func (d Downloads) eachEntry(ctx context.Context, unit, archive string, entries 
 	return nil
 }
 
+// Remove deletes the given files of a unit and then the folders that are
+// left empty, deepest first, up to and including the unit's folder -
+// never above it, and never a folder that still holds anything.
+func (d Downloads) Remove(_ context.Context, unit string, rels []string) error {
+	unitDir := filepath.Join(d.Root, filepath.FromSlash(unit))
+	if rel, err := filepath.Rel(d.Root, unitDir); err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return fmt.Errorf("%q is not a folder inside the downloads", unit)
+	}
+	dirs := map[string]bool{unitDir: true}
+	for _, r := range rels {
+		p := d.unitPath(unit, r)
+		if rel, err := filepath.Rel(unitDir, p); err != nil || strings.HasPrefix(rel, "..") {
+			return fmt.Errorf("%q is outside %q", r, unit)
+		}
+		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		for dir := filepath.Dir(p); dir != unitDir && strings.HasPrefix(dir, unitDir+string(filepath.Separator)); dir = filepath.Dir(dir) {
+			dirs[dir] = true
+		}
+	}
+	ordered := make([]string, 0, len(dirs))
+	for dir := range dirs {
+		ordered = append(ordered, dir)
+	}
+	sort.Slice(ordered, func(i, j int) bool { return len(ordered[i]) > len(ordered[j]) })
+	for _, dir := range ordered {
+		if entries, err := os.ReadDir(dir); err == nil && len(entries) == 0 {
+			os.Remove(dir) // a folder that isn't empty stays
+		}
+	}
+	return nil
+}
+
 // LibraryWriter adds files to the library. It never overwrites.
 type LibraryWriter struct {
 	Root string
@@ -237,6 +274,23 @@ func (w LibraryWriter) Write(_ context.Context, rel string, r io.Reader, modUnix
 		_ = os.Chtimes(p, t, t)
 	}
 	return nil
+}
+
+func (w LibraryWriter) Hash(_ context.Context, rel string) (string, error) {
+	p, err := w.full(rel)
+	if err != nil {
+		return "", err
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func (w LibraryWriter) Creators(context.Context) ([]string, error) {

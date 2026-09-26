@@ -40,7 +40,7 @@ const usage = `usage:
   stlib check <library-root>
   stlib scan --db <index.db> <library-root>
   stlib search --db <index.db> [--creator <name>] [--limit N] [words...]
-  stlib import --db <index.db> --source <downloads> [--settle 1h] [--dry-run] <library-root>
+  stlib import --db <index.db> --source <downloads> [--settle 1h] [--delete] [--dry-run] <library-root>
   stlib printer [--host <addr>[:<port>]] <status|files|send|print|rm|pause|resume|stop|watch> …
   stlib serve [--root <library-root>] [--data <dir>] [--listen <addr>] [--scan-interval <duration>]
       (defaults from LIBRARY_ROOT, DATA_DIR, LISTEN_ADDR, SCAN_INTERVAL)`
@@ -68,6 +68,7 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	source := fs.String("source", os.Getenv("IMPORT_SOURCE"), "downloads folder to import from")
 	settle := fs.String("settle", envOr("IMPORT_SETTLE", "1h"), "how long a download folder must be unchanged")
 	importEvery := fs.String("import-interval", envOr("IMPORT_INTERVAL", "1h"), "time between imports")
+	importDelete := fs.Bool("delete", os.Getenv("IMPORT_DELETE") == "true", "remove imported folders from the downloads once verified in the library")
 	dryRun := fs.Bool("dry-run", false, "only show where files would go")
 	host := fs.String("host", "", "printer address (printer command)")
 	if err := fs.Parse(args[1:]); err != nil {
@@ -137,7 +138,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 			return err
 		}
 		defer s.Close()
-		im := &app.Importer{Downloads: disk.Downloads{Root: *source}, Library: disk.LibraryWriter{Root: rest[0]}, Log: s, Settle: settleFor}
+		im := &app.Importer{Downloads: disk.Downloads{Root: *source}, Library: disk.LibraryWriter{Root: rest[0]}, Log: s, Settle: settleFor,
+			DeleteImported: *importDelete}
 		if *dryRun {
 			return printPreview(ctx, out, im)
 		}
@@ -145,8 +147,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "imported %d folders (%d files); %d waiting, %d failed; %d recorded as already there\n",
-			sum.Imported, sum.Files, sum.Waiting, sum.Failed, sum.Baselined)
+		fmt.Fprintf(out, "imported %d folders (%d files, %d removed from the downloads); %d waiting, %d failed; %d recorded as already there\n",
+			sum.Imported, sum.Files, sum.Removed, sum.Waiting, sum.Failed, sum.Baselined)
 	case "serve":
 		if *root == "" {
 			return errors.New("serve: no library root (set LIBRARY_ROOT or --root)\n" + usage)
@@ -166,7 +168,7 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 			if err != nil || importFor < time.Minute {
 				return fmt.Errorf("IMPORT_INTERVAL %q: must be a duration of at least 1m", *importEvery)
 			}
-			imp = &importConfig{source: *source, settle: settleFor, every: importFor}
+			imp = &importConfig{source: *source, settle: settleFor, every: importFor, delete: *importDelete}
 		}
 		return serve(ctx, *root, *data, *listen, every, imp)
 	default:

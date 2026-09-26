@@ -105,15 +105,25 @@ With `IMPORT_SOURCE` set, `stlib serve` looks at that folder every
   file names (`…_pre_supported_lys.zip`, `(Chitubox Pre Supported)`,
   `Presupports/1-10 Scale_Split`), zips are unpacked, images and documents
   go next to the model. A wrong guess can be fixed in the UI (fix label).
-- **Never destructive:** the downloads are only read; the library only gets
-  new files (written under a hidden temporary name, then renamed). A file
-  that exists with a different size is kept, the new one is added as
-  "… (imported)".
+- **The library only gets new files** (written under a hidden temporary
+  name, then renamed). A file of the same name with other content is kept,
+  the new one is added as "… (imported)".
+- **Moving instead of copying (`IMPORT_DELETE=true`):** once a download
+  folder is imported, it is removed from the downloads, so the downloads
+  folder only shows what hasn't been imported yet. Only after every file
+  is verified byte for byte in the library (read back after copying, or
+  already there with identical content); files that arrived after the
+  import started, and the creator folder, stay. Without it, the downloads
+  are only read. (The patreon-ingest downloader keeps track of what it has
+  downloaded in its own database, so removed folders aren't downloaded
+  again.)
 - **The first run imports nothing:** it records what's already in the
   downloads folder (it may have been copied by hand before). Those
   folders can be imported one by one from the Imports page; everything
   that arrives later is imported automatically. When new files arrive in
-  an imported folder, the missing ones are copied.
+  an imported folder, the missing ones are copied. Folders recorded as
+  already there are never removed on their own: if you copied them into
+  the library by hand, delete them from the downloads yourself.
 
 `stlib import --db index.db --source <downloads> --dry-run <library>` shows
 where every file would go without writing anything.
@@ -229,6 +239,7 @@ LIBRARY_ROOT=/path/to/library DATA_DIR=./data stlib serve
 | `PRINTER_DISCOVERY_PORT` | `3000` | the printer's discovery port, if it differs |
 | `IMPORT_INTERVAL` | `1h` | time between imports (at least `1m`) |
 | `IMPORT_SETTLE` | `1h` | how long a download folder must be unchanged to count as complete |
+| `IMPORT_DELETE` | `false` | `true`: remove imported folders from the downloads once verified in the library |
 | `APP_SECRET` | (generated) | at least 32 characters; else `DATA_DIR/secret.key` is created |
 | `PUBLIC_URL` | (off) | the address users open the app at; turns on passkeys (and Google) |
 | `OPEN_REGISTRATION` | `true` | `false`: after the first account, only admins add accounts |

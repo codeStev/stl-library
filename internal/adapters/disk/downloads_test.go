@@ -141,3 +141,47 @@ func TestDownloadsReportsHiddenTempFilesAndChangeTimes(t *testing.T) {
 		}
 	}
 }
+
+func TestRemoveDeletesOnlyTheUnitsImportedFiles(t *testing.T) {
+	root := t.TempDir()
+	for _, p := range []string{
+		"nomnom/Kida/STL/75mm/k.stl", "nomnom/Kida/STL/75mm/base.stl", "nomnom/Kida/kida.zip",
+		"nomnom/Kida/late.stl", // arrived after the import started
+		"nomnom/Rem/r.stl",     // another unit of the same creator
+	} {
+		full := filepath.Join(root, filepath.FromSlash(p))
+		os.MkdirAll(filepath.Dir(full), 0o755)
+		os.WriteFile(full, []byte("x"), 0o644)
+	}
+	d := Downloads{Root: root}
+	if err := d.Remove(context.Background(), "nomnom/Kida", []string{"STL/75mm/k.stl", "STL/75mm/base.stl", "kida.zip"}); err != nil {
+		t.Fatal(err)
+	}
+	exists := func(p string) bool { _, err := os.Stat(filepath.Join(root, filepath.FromSlash(p))); return err == nil }
+	if exists("nomnom/Kida/STL") || exists("nomnom/Kida/kida.zip") || !exists("nomnom/Kida/late.stl") || !exists("nomnom/Rem/r.stl") {
+		t.Error("removed the wrong things")
+	}
+	// Once the late file is gone too, the unit folder goes - the creator folder stays.
+	d.Remove(context.Background(), "nomnom/Kida", []string{"late.stl"})
+	if exists("nomnom/Kida") || !exists("nomnom") {
+		t.Error("unit folder left behind, or creator folder removed")
+	}
+	for _, bad := range []struct{ unit, rel string }{{"", "nomnom/Rem/r.stl"}, {"..", "x"}, {"nomnom/Rem", "../../outside"}} {
+		if err := d.Remove(context.Background(), bad.unit, []string{bad.rel}); err == nil {
+			t.Errorf("removed %q in %q", bad.rel, bad.unit)
+		}
+	}
+	if !exists("nomnom/Rem/r.stl") {
+		t.Error("a refused removal deleted something")
+	}
+}
+
+func TestLibraryWriterHash(t *testing.T) {
+	root := t.TempDir()
+	w := LibraryWriter{Root: root}
+	w.Write(context.Background(), "a/b.stl", strings.NewReader("hello"), 0)
+	h, err := w.Hash(context.Background(), "a/b.stl")
+	if err != nil || h != "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824" {
+		t.Errorf("%s %v", h, err)
+	}
+}

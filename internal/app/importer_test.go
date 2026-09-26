@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"sort"
@@ -16,6 +18,24 @@ type fakeDownloads struct {
 	files    []importer.File     // plain files, Rel from the root
 	archives map[string][]string // archive Rel from root -> entry paths
 	broken   map[string]bool     // archives that can't be read yet
+	content  string              // what every file contains ("x" when empty)
+	removed  []string            // unit/rel of removed files
+}
+
+func (d *fakeDownloads) Remove(_ context.Context, unit string, rels []string) error {
+	gone := map[string]bool{}
+	for _, r := range rels {
+		d.removed = append(d.removed, unit+"/"+r)
+		gone[unit+"/"+r] = true
+	}
+	var keep []importer.File
+	for _, f := range d.files {
+		if !gone[f.Rel] {
+			keep = append(keep, f)
+		}
+	}
+	d.files = keep
+	return nil
 }
 
 func (d *fakeDownloads) List(context.Context) ([]importer.File, error) { return d.files, nil }
@@ -40,15 +60,35 @@ func (d *fakeDownloads) Expand(_ context.Context, unit string, files []importer.
 }
 
 func (d *fakeDownloads) Each(_ context.Context, _ string, files []importer.File, fn func(importer.File, io.Reader) error) error {
+	c := d.content
+	if c == "" {
+		c = "x"
+	}
 	for _, f := range files {
-		if err := fn(f, strings.NewReader("x")); err != nil {
+		if err := fn(f, strings.NewReader(c)); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-type fakeLibrary struct{ files map[string]int64 }
+type fakeLibrary struct {
+	files   map[string]int64
+	content map[string]string // what was written (other files: unknown content)
+	corrupt bool              // Hash reports something else than was written
+}
+
+func (l *fakeLibrary) Hash(_ context.Context, rel string) (string, error) {
+	c, ok := l.content[rel]
+	if !ok {
+		c = strings.Repeat("?", int(l.files[rel]))
+	}
+	if l.corrupt {
+		c += "!"
+	}
+	h := sha256.Sum256([]byte(c))
+	return hex.EncodeToString(h[:]), nil
+}
 
 func (l *fakeLibrary) Stat(_ context.Context, rel string) (int64, bool, error) {
 	if s, ok := l.files[rel]; ok {
@@ -68,6 +108,10 @@ func (l *fakeLibrary) Write(_ context.Context, rel string, r io.Reader, _ int64)
 	}
 	b, _ := io.ReadAll(r)
 	l.files[rel] = int64(len(b))
+	if l.content == nil {
+		l.content = map[string]string{}
+	}
+	l.content[rel] = string(b)
 	return nil
 }
 
@@ -196,5 +240,61 @@ func TestImporterKeepsBothWhenAFileOfTheSameNameDiffers(t *testing.T) {
 	}
 	if !strings.Contains(lib.list(), "Nomnom/Kida/75mm/k (imported).stl") {
 		t.Errorf("library:\n%s", lib.list())
+	}
+}
+
+func TestImporterDeletesVerifiedImportsFromTheDownloads(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	dl := &fakeDownloads{files: []importer.File{
+		{Rel: "nomnom/Kida/STL/75mm/k.stl", Size: 1, ModUnix: 1},
+		{Rel: "nomnom/Kida/STL/75mm/base.stl", Size: 1, ModUnix: 1},
+	}}
+	lib := &fakeLibrary{files: map[string]int64{}}
+	log := &memLog{recs: map[string]ImportRecord{}, baselined: true}
+	im := &Importer{Downloads: dl, Library: lib, Log: log, Settle: time.Hour, DeleteImported: true, Now: func() time.Time { return now }}
+	sum, err := im.Run(context.Background())
+	if err != nil || sum.Imported != 1 || sum.Removed != 1 || len(dl.removed) != 2 || len(dl.files) != 0 {
+		t.Fatalf("%+v %v removed %v", sum, err, dl.removed)
+	}
+	if r := log.recs["nomnom/Kida"]; !strings.Contains(r.Message, "removed from the downloads") {
+		t.Errorf("record: %+v", r)
+	}
+}
+
+func TestImporterKeepsTheDownloadWhenTheCopyDoesntVerify(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	dl := &fakeDownloads{files: []importer.File{{Rel: "nomnom/Kida/STL/75mm/k.stl", Size: 1, ModUnix: 1}}}
+	lib := &fakeLibrary{files: map[string]int64{}, corrupt: true}
+	log := &memLog{recs: map[string]ImportRecord{}, baselined: true}
+	im := &Importer{Downloads: dl, Library: lib, Log: log, Settle: time.Hour, DeleteImported: true, Now: func() time.Time { return now }}
+	sum, _ := im.Run(context.Background())
+	if sum.Failed != 1 || len(dl.removed) != 0 || !strings.Contains(log.recs["nomnom/Kida"].Message, "differs") {
+		t.Errorf("%+v removed %v record %+v", sum, dl.removed, log.recs["nomnom/Kida"])
+	}
+}
+
+func TestImporterComparesContentNotJustSize(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	ctx := context.Background()
+	dl := &fakeDownloads{files: []importer.File{{Rel: "nomnom/Kida/STL/75mm/k.stl", Size: 1, ModUnix: 1}}}
+	lib := &fakeLibrary{files: map[string]int64{}}
+	log := &memLog{recs: map[string]ImportRecord{}, baselined: true}
+	im := &Importer{Downloads: dl, Library: lib, Log: log, Settle: time.Hour, Now: func() time.Time { return now }}
+	if _, err := im.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// The download changes (same size, other content): the library copy
+	// counts as a different file, not as "already there".
+	dl.content, dl.files[0].ModUnix = "y", 2
+	im.DeleteImported = true
+	sum, err := im.Run(ctx)
+	if err != nil || sum.Files != 1 || lib.content["Nomnom/Kida/75mm/k (imported).stl"] != "y" || len(dl.removed) != 1 {
+		t.Errorf("%+v %v\n%s removed %v", sum, err, lib.list(), dl.removed)
+	}
+	// Again, identical content: nothing written, and it's removed.
+	dl.files = []importer.File{{Rel: "nomnom/Kida/STL/75mm/k.stl", Size: 1, ModUnix: 3}}
+	dl.removed = nil
+	if sum, err := im.Run(ctx); err != nil || sum.Files != 0 || sum.Removed != 1 || len(dl.removed) != 1 {
+		t.Errorf("identical: %+v %v %s", sum, err, lib.list())
 	}
 }

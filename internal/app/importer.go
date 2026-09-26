@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -13,7 +15,8 @@ import (
 )
 
 // Downloads reads the downloads folder (e.g. where a downloader bot puts
-// new models). It is only ever read.
+// new models). It is only read, except that imported files are removed
+// when the importer is asked to (Importer.DeleteImported).
 type Downloads interface {
 	// List returns every plain file below the downloads root (Rel relative
 	// to the root).
@@ -24,6 +27,10 @@ type Downloads interface {
 	// Each streams the given files of a unit (plain files and archive
 	// entries, as returned by Expand), opening each archive once.
 	Each(ctx context.Context, unitPath string, files []importer.File, fn func(importer.File, io.Reader) error) error
+	// Remove deletes the given files of a unit (Rel as listed, archives
+	// themselves) and the folders that become empty, up to and including
+	// the unit's folder - never above it.
+	Remove(ctx context.Context, unitPath string, rels []string) error
 }
 
 // LibraryWriter adds files to the library. It never overwrites or deletes.
@@ -36,6 +43,8 @@ type LibraryWriter interface {
 	Write(ctx context.Context, rel string, r io.Reader, modUnix int64) error
 	// Creators lists the top-level folders of the library.
 	Creators(ctx context.Context) ([]string, error)
+	// Hash returns a file's SHA-256 (hex).
+	Hash(ctx context.Context, rel string) (string, error)
 }
 
 // Import states of a download folder.
@@ -69,19 +78,23 @@ type ImportLog interface {
 }
 
 // Importer copies complete new download folders into the library,
-// following the convention (see package importer). The downloads are left
-// untouched; the library only ever gets new files.
+// following the convention (see package importer). The library only ever
+// gets new files. With DeleteImported, a download folder is removed from
+// the downloads once every one of its files is verified (byte for byte)
+// in the library; otherwise the downloads are left untouched.
 type Importer struct {
-	Downloads Downloads
-	Library   LibraryWriter
-	Log       ImportLog
-	Settle    time.Duration // how long a folder must be unchanged
-	Now       func() time.Time
+	Downloads      Downloads
+	Library        LibraryWriter
+	Log            ImportLog
+	Settle         time.Duration // how long a folder must be unchanged
+	DeleteImported bool
+	Now            func() time.Time
 }
 
 // ImportSummary counts the outcome of a run.
 type ImportSummary struct {
 	Imported, Waiting, Failed, Files int
+	Removed                          int // imported folders removed from the downloads
 	Baselined                        int // units recorded as existing on the first run
 }
 
@@ -176,6 +189,14 @@ func (im *Importer) Run(ctx context.Context) (ImportSummary, error) {
 			rec.State, rec.Signature = ImportDone, sig
 			rec.Message = fmt.Sprintf("%d new files", n)
 			sum.Imported++
+			if im.DeleteImported {
+				if err := im.Downloads.Remove(ctx, u.Path, sourceRels(u)); err != nil {
+					rec.Message += "; removing it from the downloads failed: " + err.Error()
+				} else {
+					rec.Message += ", removed from the downloads"
+					sum.Removed++
+				}
+			}
 		}
 		if err := im.save(ctx, rec); err != nil {
 			return sum, err
@@ -232,29 +253,96 @@ func (im *Importer) importUnit(ctx context.Context, u importer.Unit, rec *Import
 	for _, p := range placements {
 		dest[p.File.Rel] = target + strings.TrimPrefix(p.Target, modelDir)
 	}
+	// Every file ends up verified in the library: copied (and read back
+	// when the downloads are to be deleted), or found there already with
+	// the same content. A same-named file with other content is kept and
+	// the download is written next to it (a second pass, as its stream
+	// was used up comparing).
 	copied := 0
+	var differ []importer.File
+	var written []writtenFile
+	write := func(f importer.File, to string, r io.Reader) error {
+		h := sha256.New()
+		if err := im.Library.Write(ctx, to, io.TeeReader(r, h), f.ModUnix); err != nil {
+			return fmt.Errorf("writing %s: %w", to, err)
+		}
+		written = append(written, writtenFile{to, hex.EncodeToString(h.Sum(nil))})
+		copied++
+		return nil
+	}
 	err = im.Downloads.Each(ctx, u.Path, files, func(f importer.File, r io.Reader) error {
 		to := dest[f.Rel]
 		size, exists, err := im.Library.Stat(ctx, to)
 		if err != nil {
 			return err
 		}
-		if exists {
-			if size == f.Size {
-				return nil // already there
-			}
-			to = alternative(to) // a different file of the same name: keep both
-			if _, exists, err := im.Library.Stat(ctx, to); err != nil || exists {
-				return err
+		if !exists {
+			return write(f, to, r)
+		}
+		if size == f.Size {
+			same, err := im.sameContent(ctx, to, r)
+			if err != nil || same {
+				return err // already there
 			}
 		}
-		if err := im.Library.Write(ctx, to, r, f.ModUnix); err != nil {
-			return fmt.Errorf("writing %s: %w", to, err)
-		}
-		copied++
+		differ = append(differ, f)
 		return nil
 	})
+	if err == nil && len(differ) > 0 {
+		err = im.Downloads.Each(ctx, u.Path, differ, func(f importer.File, r io.Reader) error {
+			to := alternative(dest[f.Rel])
+			size, exists, err := im.Library.Stat(ctx, to)
+			if err != nil {
+				return err
+			}
+			if !exists {
+				return write(f, to, r)
+			}
+			if size == f.Size {
+				if same, err := im.sameContent(ctx, to, r); err != nil || same {
+					return err // imported before under the other name
+				}
+			}
+			return fmt.Errorf("%s and %s both exist with other content", dest[f.Rel], to)
+		})
+	}
+	if err == nil && im.DeleteImported {
+		for _, w := range written {
+			got, herr := im.Library.Hash(ctx, w.to)
+			if herr != nil {
+				return copied, herr
+			}
+			if got != w.sum {
+				return copied, fmt.Errorf("%s differs from the download after copying", w.to)
+			}
+		}
+	}
 	return copied, err
+}
+
+type writtenFile struct{ to, sum string }
+
+// sameContent reports whether r (read to the end) has the same content as
+// the library file rel.
+func (im *Importer) sameContent(ctx context.Context, rel string, r io.Reader) (bool, error) {
+	h := sha256.New()
+	if _, err := io.Copy(h, r); err != nil {
+		return false, err
+	}
+	lib, err := im.Library.Hash(ctx, rel)
+	return lib == hex.EncodeToString(h.Sum(nil)), err
+}
+
+// sourceRels are a unit's files as they sit in the downloads (archives,
+// not their entries).
+func sourceRels(u importer.Unit) []string {
+	var out []string
+	for _, f := range u.Files {
+		if !f.Hidden {
+			out = append(out, f.Rel)
+		}
+	}
+	return out
 }
 
 // creatorDir maps a downloads creator folder ("nomnom", "wicked") to the
