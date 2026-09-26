@@ -35,6 +35,11 @@ Features:
 - **Import from a downloads folder** (optional): new, fully downloaded
   models are copied into the library in the convention's layout, zip
   archives unpacked.
+- **Notifications** (optional) via ntfy and/or email when a print finishes,
+  is stopped or fails, and when imports are done or need attention. Prints
+  started from the app are recorded in the print history when they finish.
+- **Accounts**: sign-in with a mandatory second factor (authenticator app
+  or passkey), recovery codes, signed-in devices, optional Google sign-in.
 - `stlib check` / `stlib scan` / `stlib search` on the command line.
 
 ## Folder convention
@@ -178,6 +183,47 @@ app (`--db`, default `DATA_DIR/index.db`).
 point the settings at it (or `--host 127.0.0.1:13030` with
 `PRINTER_DISCOVERY_PORT=13000`).
 
+### Notifications
+
+On the Settings page (admins): an [ntfy](https://ntfy.sh) topic URL (with
+an optional access token) and/or an SMTP server, and which events to send -
+print finished / stopped / error, import done / needs attention. "Send
+test" tries the entered values before saving. Tokens and passwords are
+stored encrypted with the app secret (see below) and never sent back to the
+browser.
+
+### Accounts and sign-in
+
+Everything but the sign-in pages needs an account. Anyone who can reach the
+app can register; **the first account becomes the admin** - so register
+yours right after the first start. Accounts share the library, the print
+queue and the printer; admins also manage settings, on-request imports and
+the accounts (roles, disable, reset a second factor, set a password).
+
+- Passwords: at least 12 characters, bcrypt-hashed. Repeated failures lock
+  the account for 15 minutes; sign-in, registration and recovery are rate
+  limited per client. Answers never reveal whether an email has an account.
+- A **second factor is mandatory**: an authenticator app (TOTP) or a
+  passkey. Setting it up shows 10 single-use **recovery codes** - they sign
+  you in when the second factor is lost (and you set up a new one), and
+  reset a forgotten password (there is no email-based reset).
+- The session is a signed token (24 h) in an HttpOnly, SameSite=Strict
+  cookie; the account page lists signed-in devices and signs them out.
+  Changing the password, a role or the second factor signs out other
+  devices.
+- **Passkeys** need `PUBLIC_URL` (the exact address users open, e.g.
+  `https://stl.example.org`; browsers allow passkeys only over HTTPS or on
+  `localhost`).
+- **Google sign-in** (optional) needs `PUBLIC_URL`, `GOOGLE_CLIENT_ID` and
+  `GOOGLE_CLIENT_SECRET` (an OAuth client of type "Web application" with the
+  redirect URI `<PUBLIC_URL>/login/oauth2/code/google`). A Google account
+  never takes over an existing password account with the same email, and it
+  still needs the second factor.
+- `APP_SECRET` (at least 32 characters) signs sessions and encrypts stored
+  secrets. Without it, one is generated into `DATA_DIR/secret.key` - keep
+  that file with the data (losing it signs everyone out and makes stored
+  notification passwords unreadable).
+
 ### Server
 
 ```
@@ -195,6 +241,10 @@ LIBRARY_ROOT=/path/to/library DATA_DIR=./data stlib serve
 | `PRINTER_DISCOVERY_PORT` | `3000` | the printer's discovery port, if it differs |
 | `IMPORT_INTERVAL` | `1h` | time between imports (at least `1m`) |
 | `IMPORT_SETTLE` | `1h` | how long a download folder must be unchanged to count as complete |
+| `APP_SECRET` | (generated) | at least 32 characters; else `DATA_DIR/secret.key` is created |
+| `PUBLIC_URL` | (off) | the address users open the app at; turns on passkeys (and Google) |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | (off) | Google sign-in, with `PUBLIC_URL` |
+| `TRUST_PROXY_HEADERS` | `false` | `true` behind a reverse proxy: client address from `X-Forwarded-For` (rate limits, device list) |
 
 Each has a flag of the same meaning (`--root`, `--data`, `--listen`,
 `--scan-interval`).

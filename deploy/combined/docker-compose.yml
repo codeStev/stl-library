@@ -2,9 +2,9 @@
 # before `docker compose up -d`. Requires `docker login <REGISTRY_HOST>`
 # first if the registry needs auth.
 #
-# No built-in auth or HTTPS - bound to 127.0.0.1 by default; put it behind
-# whatever network boundary you already trust (Tailscale/WireGuard, a
-# reverse proxy with its own auth, or LAN only).
+# Sign-in is built in (the first account registered becomes the admin), but
+# there is no HTTPS - bound to 127.0.0.1 by default; put a TLS reverse proxy
+# in front (or keep it on a network you trust, e.g. Tailscale/WireGuard).
 
 services:
   stl-library:
@@ -18,6 +18,12 @@ services:
       IMPORT_SETTLE: ${IMPORT_SETTLE:-1h}
       # Optional default printer; the Settings page can set it instead.
       PRINTER_ADDR: ${PRINTER_ADDR:-}
+      # Sign-in (see .env.example).
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      APP_SECRET: ${APP_SECRET:-}
+      TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
     ports:
       - "${APP_BIND_HOST:-127.0.0.1}:${APP_PORT:-8080}:8080"
     volumes:
