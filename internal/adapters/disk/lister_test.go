@@ -61,3 +61,16 @@ func TestFilesOpensInsideTheRootOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestThumbCacheRoundTrip(t *testing.T) {
+	c := ThumbCache{Dir: t.TempDir()}
+	if _, ok, err := c.Get("abcdef"); ok || err != nil {
+		t.Fatalf("empty cache: %v %v", ok, err)
+	}
+	if err := c.Put("abcdef", []byte("jpg")); err != nil {
+		t.Fatal(err)
+	}
+	if data, ok, err := c.Get("abcdef"); !ok || err != nil || string(data) != "jpg" {
+		t.Errorf("got %q %v %v", data, ok, err)
+	}
+}

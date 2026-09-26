@@ -73,9 +73,10 @@ type VariantDetail struct {
 
 // FileRef is a file of the library by id and path.
 type FileRef struct {
-	ID   int64
-	Path string
-	Size int64
+	ID      int64
+	Path    string
+	Size    int64
+	ModUnix int64
 }
 
 // CreatorCount is a creator with its number of models.

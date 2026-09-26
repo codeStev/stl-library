@@ -365,7 +365,7 @@ func (s *Store) Model(ctx context.Context, id int64) (*app.ModelDetail, error) {
 		}
 		m.Variants = append(m.Variants, *v)
 	}
-	if m.Images, err = s.files(ctx, `SELECT id, path, size FROM image WHERE model_id = ? ORDER BY path`, id); err != nil {
+	if m.Images, err = s.files(ctx, `SELECT id, path, size, mod_unix FROM image WHERE model_id = ? ORDER BY path`, id); err != nil {
 		return nil, err
 	}
 	return &m, nil
@@ -380,7 +380,7 @@ func (s *Store) Variant(ctx context.Context, id int64) (*app.VariantDetail, erro
 	if err != nil {
 		return nil, notFound(err)
 	}
-	if v.Parts, err = s.files(ctx, `SELECT id, path, size FROM part WHERE variant_id = ? ORDER BY path`, id); err != nil {
+	if v.Parts, err = s.files(ctx, `SELECT id, path, size, mod_unix FROM part WHERE variant_id = ? ORDER BY path`, id); err != nil {
 		return nil, err
 	}
 	return &v, nil
@@ -395,7 +395,7 @@ func (s *Store) files(ctx context.Context, query string, id int64) ([]app.FileRe
 	var out []app.FileRef
 	for rows.Next() {
 		var f app.FileRef
-		if err := rows.Scan(&f.ID, &f.Path, &f.Size); err != nil {
+		if err := rows.Scan(&f.ID, &f.Path, &f.Size, &f.ModUnix); err != nil {
 			return nil, err
 		}
 		out = append(out, f)
@@ -406,7 +406,7 @@ func (s *Store) files(ctx context.Context, query string, id int64) ([]app.FileRe
 // Image returns one image of a model.
 func (s *Store) Image(ctx context.Context, id int64) (*app.FileRef, error) {
 	f := app.FileRef{ID: id}
-	if err := s.db.QueryRowContext(ctx, `SELECT path, size FROM image WHERE id = ?`, id).Scan(&f.Path, &f.Size); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT path, size, mod_unix FROM image WHERE id = ?`, id).Scan(&f.Path, &f.Size, &f.ModUnix); err != nil {
 		return nil, notFound(err)
 	}
 	return &f, nil
@@ -415,7 +415,7 @@ func (s *Store) Image(ctx context.Context, id int64) (*app.FileRef, error) {
 // Part returns one part file.
 func (s *Store) Part(ctx context.Context, id int64) (*app.FileRef, error) {
 	f := app.FileRef{ID: id}
-	if err := s.db.QueryRowContext(ctx, `SELECT path, size FROM part WHERE id = ?`, id).Scan(&f.Path, &f.Size); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT path, size, mod_unix FROM part WHERE id = ?`, id).Scan(&f.Path, &f.Size, &f.ModUnix); err != nil {
 		return nil, notFound(err)
 	}
 	return &f, nil
