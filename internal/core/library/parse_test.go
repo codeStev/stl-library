@@ -137,3 +137,27 @@ func TestImagesOutsideModelsAreIgnored(t *testing.T) {
 		t.Errorf("models=%v issues=%v", describe(models), issues)
 	}
 }
+
+func TestSignatureChangesWithContentOnly(t *testing.T) {
+	read := func(fs ...File) string {
+		ms, _ := Read(fs)
+		return ms[0].Signature()
+	}
+	a := File{Path: "C/R/M/32mm/Supported/a.stl", Size: 10, ModUnix: 1}
+	img := File{Path: "C/R/M/cover.jpg", Size: 5, ModUnix: 1}
+	b := File{Path: "C/R/M/32mm/Supported/b.stl", Size: 3, ModUnix: 1}
+	base := read(a, b, img)
+	if read(img, b, a) != base {
+		t.Error("order of the listing changed the signature")
+	}
+	a2 := a
+	a2.Size = 11
+	if read(a2, b, img) == base {
+		t.Error("a changed part size kept the signature")
+	}
+	img2 := img
+	img2.ModUnix = 2
+	if read(a, b, img2) == base {
+		t.Error("a changed image kept the signature")
+	}
+}

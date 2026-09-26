@@ -90,6 +90,10 @@ func (r *reader) result() ([]*Model, []Issue) {
 	models := make([]*Model, 0, len(r.models))
 	for _, m := range r.models {
 		sort.Slice(m.Variants, func(i, j int) bool { return m.Variants[i].Dir < m.Variants[j].Dir })
+		for _, v := range m.Variants {
+			sort.Slice(v.Parts, func(i, j int) bool { return v.Parts[i].Path < v.Parts[j].Path })
+		}
+		sort.Slice(m.Images, func(i, j int) bool { return m.Images[i].Path < m.Images[j].Path })
 		models = append(models, m)
 	}
 	sort.Slice(models, func(i, j int) bool { return models[i].Dir < models[j].Dir })

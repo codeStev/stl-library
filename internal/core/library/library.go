@@ -4,7 +4,13 @@
 // of files, never on the disk.
 package library
 
-import "github.com/codeStev/stl-library/convention"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+
+	"github.com/codeStev/stl-library/convention"
+)
 
 // File is one file of the listing, with its path relative to the library
 // root in slash form ("Loot Studios/Abyssal Haze/Bell Head/32mm/Supported/a.stl").
@@ -40,4 +46,28 @@ type Variant struct {
 type Issue struct {
 	Dir    string
 	Reason string
+}
+
+// Signature identifies a model's current content: its identity, variants,
+// parts and images with their sizes and modification times. A rescan that
+// yields the same signature has nothing to update.
+func (m *Model) Signature() string {
+	h := sha256.New()
+	w := func(s string) { h.Write([]byte(s)); h.Write([]byte{0}) }
+	w(m.Creator)
+	w(m.Release)
+	w(m.Category)
+	w(m.Name)
+	for _, v := range m.Variants {
+		w(v.Dir)
+		w(v.Option)
+		w(fmt.Sprint(v.Dims))
+		for _, p := range v.Parts {
+			w(fmt.Sprintf("%s|%d|%d", p.Path, p.Size, p.ModUnix))
+		}
+	}
+	for _, i := range m.Images {
+		w(fmt.Sprintf("%s|%d|%d", i.Path, i.Size, i.ModUnix))
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
