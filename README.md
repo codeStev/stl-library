@@ -12,8 +12,9 @@ memory, and low CPU/I/O priority for anything that touches the disk.
 library to follow the folder convention below, reads conforming folders
 exactly, and lists folders that don't conform so you can fix them yourself.
 
-Status: in development. What exists so far is the definition of the
-convention (`convention/`).
+Status: in development. What exists so far: the definition of the
+convention (`convention/`), and `stlib check`, which reads a library and
+reports its models and every folder that doesn't follow the convention.
 
 ## Folder convention
 
@@ -41,7 +42,15 @@ convention (`convention/`).
 - **Categories** optionally group models inside a release: `Heroes`,
   `Enemies`, `Busts`, `Environments`, `Objects`, …
 - **Options** (a helmet version, an alternative pose) are a subfolder inside
-  the variant, not a model of their own.
+  the variant, not a model of their own. A model without variant levels
+  can have options directly below it (`Stonewurm Riders/Pose01`): any level
+  deeper than `<Creator>/<Release>/[<Category>]/<Model>` is an option.
+- **Levels are read by position.** A model may sit directly under its
+  creator (`<Creator>/<Model>`), or under a creator-level category
+  (`<Creator>/Busts/<Model>`). A category is recognized by its canonical
+  name.
+- Folders starting with `_` (e.g. `_duplicates`) and hidden files are not
+  part of the library.
 
 Example: `Loot Studios/Abyssal Haze/Enemies/Bell Head/32mm/Supported Lychee/`
 
@@ -58,10 +67,24 @@ Hexagonal. The dependency rule is enforced by `internal/architecture_test.go`:
 | Layer | Packages | May depend on |
 |---|---|---|
 | convention (public, pure) | `convention` | standard library only, no I/O |
-| app core, use cases + ports, adapters, driving adapters | added with the app (`internal/core`, `internal/app`, `internal/adapters`, `cmd/stlib`) | inward only |
+| domain (pure) | `internal/core/library` - reads a file listing into models, variants, parts and issues | convention |
+| use cases + ports | `internal/app` (`Check`; port `Lister`) | core |
+| adapters | `internal/adapters/disk` (read-only listing) | app, core |
+| driving adapter | `cmd/stlib` | everything, wiring only |
+
+## Usage
+
+```
+stlib check /path/to/library
+```
+
+Prints how many models, variants and part files were found per creator,
+then every folder that doesn't follow the convention and why. Runs at the
+lowest CPU and I/O priority and only reads.
 
 ## Building
 
 ```
 go test ./...
+go build ./cmd/stlib
 ```
