@@ -161,3 +161,18 @@ func TestSignatureChangesWithContentOnly(t *testing.T) {
 		t.Error("a changed image kept the signature")
 	}
 }
+
+func TestNormalizeTags(t *testing.T) {
+	got := NormalizeTags([]string{"  Painted ", "painted", "", "to   print", strings.Repeat("x", 41), "Dragon"})
+	want := []string{"Painted", "to print", "Dragon"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("got %q", got)
+	}
+	many := make([]string, 50)
+	for i := range many {
+		many[i] = fmt.Sprint("t", i)
+	}
+	if len(NormalizeTags(many)) != MaxTags {
+		t.Error("tag limit not applied")
+	}
+}
