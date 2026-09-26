@@ -15,6 +15,7 @@ export interface ModelSummary {
   displayName?: string;
   tags: string[];
   prints: number;
+  hidden?: boolean;
 }
 
 export interface FileRef {
@@ -39,6 +40,16 @@ export interface Variant {
   parts: FileRef[];
   prints: Print[];
   queued: boolean;
+  relabeled?: boolean;
+}
+
+export interface ImportRecord {
+  source: string;
+  state: "existing" | "waiting" | "queued" | "imported" | "failed";
+  target?: string;
+  files: number;
+  message?: string;
+  updated: number;
 }
 
 export interface Tag {
@@ -93,7 +104,20 @@ export interface Filters {
   creator: string;
   tag: string;
   printed: "" | "yes" | "no";
+  hidden: "" | "yes";
 }
+
+// Canonical values for relabeling (see the convention package).
+export const DIM_VALUES: Record<DimKey, string[]> = {
+  scale: ["28mm", "32mm", "35mm", "54mm", "75mm", "100mm", "120mm", "178mm", "1-6", "1-10", "1-12", "Bust", "Freescale", "Heroic"],
+  supports: ["Supported", "No Supports"],
+  density: ["Beefed", "Light"],
+  format: ["Lychee", "Chitubox", "STL", "OBJ", "3MF"],
+  fill: ["Hollow", "Solid"],
+  split: ["Combined"],
+  tech: ["FDM", "Resin"],
+  extra: ["Repaired", "Original"],
+};
 
 export const displayName = (m: { name: string; displayName?: string }) => m.displayName || m.name;
 
@@ -106,6 +130,12 @@ export const api = {
   markPrinted: (variantId: number, note: string) => send<Print>("POST", `/api/variants/${variantId}/prints`, { note }),
   deletePrint: (id: number) => send("DELETE", `/api/prints/${id}`),
   queue: () => get<QueueItem[]>("/api/queue"),
+  setHidden: (modelId: number, hidden: boolean) => send("PUT", `/api/models/${modelId}/hidden`, { hidden }),
+  setLabel: (variantId: number, dims: Partial<Record<DimKey, string>>, option: string) =>
+    send("PUT", `/api/variants/${variantId}/label`, { dims, option }),
+  resetLabel: (variantId: number) => send("DELETE", `/api/variants/${variantId}/label`),
+  imports: () => get<{ enabled: boolean; records: ImportRecord[] }>("/api/imports"),
+  requestImport: (source: string) => send("POST", "/api/imports/request", { source }),
   enqueue: (variantId: number, note = "") => send("PUT", `/api/variants/${variantId}/queue`, { note }),
   dequeue: (variantId: number) => send("DELETE", `/api/variants/${variantId}/queue`),
   model: (id: number) => get<ModelDetail>(`/api/models/${id}`),

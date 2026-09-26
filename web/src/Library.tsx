@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, displayName, type Creator, type Filters, type ModelSummary, type Tag } from "./api";
 
 const PAGE = 60;
-const empty: Filters = { q: "", creator: "", tag: "", printed: "" };
+const empty: Filters = { q: "", creator: "", tag: "", printed: "", hidden: "" };
 
 function loadFilters(): Filters {
   try {
@@ -85,11 +85,15 @@ export function Library() {
           <option value="yes">Printed</option>
           <option value="no">Never printed</option>
         </select>
+        <label className="check">
+          <input type="checkbox" checked={f.hidden === "yes"} onChange={(e) => set({ hidden: e.target.checked ? "yes" : "" })} />
+          show hidden
+        </label>
       </div>
       {error && <p className="error">{error}</p>}
       <div className="grid">
         {models.map((m) => (
-          <a key={m.id} className="card" href={`#/model/${m.id}`}>
+          <a key={m.id} className={`card${m.hidden ? " hidden-model" : ""}`} href={`#/model/${m.id}`}>
             <div className="cover">
               {m.preview ? <img src={api.previewURL(m.id)} alt="" loading="lazy" /> : <span>no preview</span>}
               {m.prints > 0 && <span className="badge">printed{m.prints > 1 ? ` ×${m.prints}` : ""}</span>}

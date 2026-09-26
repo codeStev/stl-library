@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { api, displayName, formatBytes, formatDate, type DimKey, type FileRef, type ModelDetail, type Variant } from "./api";
+import { api, DIM_VALUES, displayName, formatBytes, formatDate, type DimKey, type FileRef, type ModelDetail, type Variant } from "./api";
 
 // three.js is large; it loads only when a 3D view is opened.
 const Viewer = lazy(() => import("./Viewer"));
@@ -89,13 +89,16 @@ export function ModelPage({ id }: { id: number }) {
         <a
           href="#/"
           onClick={() =>
-            sessionStorage.setItem("filters", JSON.stringify({ q: "", creator: m.creator, tag: "", printed: "" }))
+            sessionStorage.setItem("filters", JSON.stringify({ q: "", creator: m.creator, tag: "", printed: "", hidden: "" }))
           }
         >
           {m.creator}
         </a>
         {m.release && <> › {m.release}</>}
         {m.category && <> › {m.category}</>}
+        <button className="link hide-toggle" onClick={() => act(api.setHidden(m.id, !m.hidden))}>
+          {m.hidden ? "hidden — show in library again" : "hide from library"}
+        </button>
       </div>
       {actionError && <p className="error">{actionError}</p>}
       <NameEditor m={m} act={act} />
@@ -161,7 +164,9 @@ export function ModelPage({ id }: { id: number }) {
               <h2>
                 {sel.label || "Files"}
                 {sel.option && <span className="option"> · {sel.option}</span>}
+                {sel.relabeled && <span className="option"> (corrected)</span>}
               </h2>
+              <LabelEditor variant={sel} act={act} />
               <div className="actions">
                 <a className="download" href={api.zipURL(sel.id)}>
                   Download zip ({sel.parts.length} files, {formatBytes(sel.parts.reduce((n, p) => n + p.size, 0))})
@@ -293,6 +298,76 @@ function PrintButton({ variant, act }: { variant: Variant; act: Act }) {
       <button type="button" onClick={() => setOpen(false)}>
         Cancel
       </button>
+    </form>
+  );
+}
+
+const LABEL_KEYS: { key: DimKey; label: string }[] = [
+  { key: "scale", label: "Scale" },
+  { key: "supports", label: "Supports" },
+  { key: "density", label: "Density" },
+  { key: "format", label: "Format" },
+  { key: "split", label: "Split" },
+  { key: "fill", label: "Fill" },
+  { key: "tech", label: "Tech" },
+  { key: "extra", label: "Extra" },
+];
+
+// LabelEditor corrects what the folder names say about a variant. The
+// folders stay as they are; the correction is kept by the app.
+function LabelEditor({ variant, act }: { variant: Variant; act: Act }) {
+  const [open, setOpen] = useState(false);
+  const [dims, setDims] = useState(variant.dims);
+  const [option, setOption] = useState(variant.option ?? "");
+  if (!open) {
+    return (
+      <div className="label-links">
+        <button className="link" onClick={() => (setDims(variant.dims), setOption(variant.option ?? ""), setOpen(true))}>
+          fix label
+        </button>
+        {variant.relabeled && (
+          <button className="link" onClick={() => act(api.resetLabel(variant.id))}>
+            use folder names again
+          </button>
+        )}
+      </div>
+    );
+  }
+  return (
+    <form
+      className="label-edit"
+      onSubmit={(e) => {
+        e.preventDefault();
+        act(api.setLabel(variant.id, dims, option).then(() => setOpen(false)));
+      }}
+    >
+      {LABEL_KEYS.map(({ key, label }) => {
+        const values = DIM_VALUES[key];
+        const cur = dims[key] ?? "";
+        return (
+          <label key={key}>
+            {label}
+            <select value={cur} onChange={(e) => setDims({ ...dims, [key]: e.target.value || undefined })}>
+              <option value="">—</option>
+              {[...new Set(cur && !values.includes(cur) ? [cur, ...values] : values)].map((v) => (
+                <option key={v} value={v}>
+                  {v}
+                </option>
+              ))}
+            </select>
+          </label>
+        );
+      })}
+      <label>
+        Option
+        <input value={option} onChange={(e) => setOption(e.target.value)} maxLength={100} placeholder="e.g. Helmet Version" />
+      </label>
+      <div className="label-buttons">
+        <button type="submit">Save</button>
+        <button type="button" onClick={() => setOpen(false)}>
+          Cancel
+        </button>
+      </div>
     </form>
   );
 }

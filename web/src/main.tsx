@@ -4,6 +4,7 @@ import { Library } from "./Library";
 import { ModelPage } from "./ModelPage";
 import { Issues } from "./Issues";
 import { Queue } from "./Queue";
+import { Imports } from "./Imports";
 import "./style.css";
 
 // Hash routes: "#/" library, "#/model/12", "#/issues".
@@ -29,6 +30,7 @@ function App() {
         <nav>
           <a href="#/">Library</a>
           <a href="#/queue">Print queue</a>
+          <a href="#/imports">Imports</a>
           <a href="#/issues">Not following the convention</a>
         </nav>
       </header>
@@ -39,6 +41,8 @@ function App() {
           <Issues />
         ) : route.startsWith("#/queue") ? (
           <Queue />
+        ) : route.startsWith("#/imports") ? (
+          <Imports />
         ) : (
           <Library />
         )}
