@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,7 +24,7 @@ import (
 )
 
 // authServer serves the API with sign-in on (real store and crypto).
-func authServer(t *testing.T) *httptest.Server {
+func authServer(t *testing.T, configure ...func(*app.Auth)) *httptest.Server {
 	t.Helper()
 	store, err := sqlite.Open(filepath.Join(t.TempDir(), "index.db"))
 	if err != nil {
@@ -33,8 +35,16 @@ func authServer(t *testing.T) *httptest.Server {
 	auth := &app.Auth{Accounts: store, Hasher: authcrypto.Bcrypt{Cost: bcrypt.MinCost},
 		Tokens: authcrypto.JWT{Key: keys.Derive("jwt", 32), Issuer: "stlib"}, TOTP: authcrypto.TOTP{Issuer: "STL Library"},
 		Sealer: keys}
-	api := &API{Store: store, User: app.UserData{Store: store}, Auth: auth,
-		Notifications: &app.Notifications{Store: store, Sealer: keys, Channels: func(app.NotificationSettings) []app.Notifier { return nil }}}
+	for _, c := range configure {
+		c(auth)
+	}
+	notes := auth.Notify
+	if notes == nil {
+		notes = &app.Notifications{Store: store, Sealer: keys, Channels: func(app.NotificationSettings) []app.Notifier { return nil }}
+	} else {
+		notes.Store, notes.Sealer = store, keys
+	}
+	api := &API{Store: store, User: app.UserData{Store: store}, Auth: auth, Notifications: notes}
 	srv := httptest.NewServer(api.Handler())
 	t.Cleanup(srv.Close)
 	return srv
@@ -248,3 +258,95 @@ func TestLoginIsRateLimited(t *testing.T) {
 	}
 }
 
+// sent collects notifications.
+type sent struct {
+	mu    sync.Mutex
+	notes []app.Notification
+}
+
+func (s *sent) Send(_ context.Context, n app.Notification) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.notes = append(s.notes, n)
+	return nil
+}
+
+func (s *sent) list() []app.Notification {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]app.Notification(nil), s.notes...)
+}
+
+func TestClosedRegistration(t *testing.T) {
+	box := &sent{}
+	srv := authServer(t, func(a *app.Auth) {
+		a.ClosedRegistration = true
+		a.Notify = &app.Notifications{Channels: func(app.NotificationSettings) []app.Notifier { return []app.Notifier{box} }}
+	})
+	anon := newBrowser(t, srv)
+	var opts map[string]bool
+	anon.do("GET", "/api/auth/options", "", nil, &opts)
+	if !opts["registration"] {
+		t.Error("registration closed before the first account")
+	}
+	admin := newBrowser(t, srv)
+	enroll(t, admin, "admin@x.org", "admin password 1")
+	anon.do("GET", "/api/auth/options", "", nil, &opts)
+	if opts["registration"] {
+		t.Error("registration still open")
+	}
+	if code := anon.do("POST", "/api/accounts/register", "", creds{"email": "new@x.org", "password": "new password 12"}, nil); code != 403 {
+		t.Errorf("registered while closed: %d", code)
+	}
+
+	// Admins still add accounts; the new user enrolls at the first sign-in.
+	var created accountJSON
+	if code := admin.do("POST", "/api/accounts", "", map[string]any{"email": "Friend@x.org", "password": "friend password", "role": "USER"}, &created); code != 201 || created.Email != "friend@x.org" {
+		t.Fatalf("admin create: %d %+v", code, created)
+	}
+	if code := admin.do("POST", "/api/accounts", "", map[string]any{"email": "friend@x.org", "password": "friend password", "role": "USER"}, nil); code != 409 {
+		t.Errorf("duplicate: %d", code)
+	}
+	if code := admin.do("POST", "/api/accounts", "", map[string]any{"email": "g@x.org", "google": true, "role": "USER"}, nil); code != 400 {
+		t.Errorf("Google account without Google sign-in: %d", code)
+	}
+	var lr loginResultJSON
+	if code := anon.do("POST", "/api/auth/login", "", creds{"email": "friend@x.org", "password": "friend password"}, &lr); code != 200 || lr.Status != app.StatusMFASetup {
+		t.Errorf("created account can't sign in: %d %+v", code, lr)
+	}
+	friend := newBrowser(t, srv)
+	var fl loginResultJSON
+	friend.do("POST", "/api/auth/login", "", creds{"email": "friend@x.org", "password": "friend password"}, &fl)
+	if code := friend.do("POST", "/api/accounts", fl.PendingToken, map[string]any{"email": "x@x.org", "password": "xxxxxxxxxxxxx", "role": "ADMIN"}, nil); code != 401 {
+		t.Errorf("non-admin created an account: %d", code)
+	}
+
+	// The event was never switched on (TestRegistrationNotifies covers it).
+	if n := box.list(); len(n) != 0 {
+		t.Errorf("notified while the event was off: %+v", n)
+	}
+}
+
+func TestRegistrationNotifies(t *testing.T) {
+	box := &sent{}
+	srv := authServer(t, func(a *app.Auth) {
+		a.Notify = &app.Notifications{Channels: func(app.NotificationSettings) []app.Notifier { return []app.Notifier{box} }}
+	})
+	admin := newBrowser(t, srv)
+	enroll(t, admin, "admin@x.org", "admin password 1")
+	if code := admin.do("PUT", "/api/settings/notifications", "", map[string]any{"events": map[string]bool{"account.registered": true}}, nil); code != 204 {
+		t.Fatalf("settings: %d", code)
+	}
+	anon := newBrowser(t, srv)
+	anon.do("POST", "/api/accounts/register", "", creds{"email": "new@x.org", "password": "new password 12"}, nil)
+	anon.do("POST", "/api/accounts/register", "", creds{"email": "new@x.org", "password": "new password 12"}, nil) // taken: no news
+	deadline := time.Now().Add(2 * time.Second)
+	for len(box.list()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
+	n := box.list()
+	if len(n) != 1 || n[0].Event != app.EventAccountRegistered || !strings.Contains(n[0].Message, "new@x.org") {
+		t.Errorf("notifications: %+v", n)
+	}
+}

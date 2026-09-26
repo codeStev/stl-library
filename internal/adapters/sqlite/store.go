@@ -136,6 +136,11 @@ var migrations = []string{
 	);
 	CREATE INDEX webauthn_credential_account ON webauthn_credential (account_id);
 	CREATE TABLE ephemeral (key TEXT PRIMARY KEY, value BLOB NOT NULL, expires_unix INTEGER NOT NULL);`,
+
+	// Google accounts an admin added have no subject until their first
+	// sign-in; several may wait at once.
+	`DROP INDEX account_external;
+	CREATE UNIQUE INDEX account_external ON account (auth_provider, external_subject) WHERE external_subject != '';`,
 }
 
 func migrate(db *sql.DB) error {

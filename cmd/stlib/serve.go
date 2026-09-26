@@ -56,7 +56,7 @@ func serve(ctx context.Context, root, data, listen string, every time.Duration, 
 	if addr := os.Getenv("PRINTER_ADDR"); addr != "" {
 		printing.Default = parsePrinterAddr(addr)
 	}
-	auth, err := newAuth(store, keys)
+	auth, err := newAuth(store, keys, notifications)
 	if err != nil {
 		return err
 	}

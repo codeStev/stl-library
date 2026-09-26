@@ -230,6 +230,7 @@ func (a *API) authRoutes(h func(pattern string, lvl level, f http.HandlerFunc)) 
 	h("DELETE /api/accounts/me/passkeys/{pid}", full, a.deletePasskey)
 
 	h("GET /api/accounts", admin, a.accounts)
+	h("POST /api/accounts", admin, a.createAccount)
 	h("PATCH /api/accounts/{aid}", admin, a.changeAccount)
 }
 
@@ -293,7 +294,8 @@ func (a *API) authOptions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]bool{"google": a.Auth.GoogleEnabled(),
-		"passkeys": a.Auth.Passkeys != nil && a.Auth.Passkeys.Enabled()})
+		"passkeys":     a.Auth.Passkeys != nil && a.Auth.Passkeys.Enabled(),
+		"registration": a.Auth.RegistrationOpen(r.Context())})
 }
 
 type credentialsJSON struct {
@@ -371,8 +373,10 @@ func (a *API) finishGoogle(w http.ResponseWriter, r *http.Request) {
 	code, err := a.Auth.FinishGoogle(r.Context(), q.Get("state"), q.Get("code"))
 	if err != nil {
 		msg := "Google sign-in failed."
-		if errors.Is(err, app.ErrConflict) {
-			msg = strings.TrimPrefix(err.Error(), app.ErrConflict.Error()+": ")
+		for _, known := range []error{app.ErrConflict, app.ErrForbidden} {
+			if errors.Is(err, known) {
+				msg = strings.TrimPrefix(err.Error(), known.Error()+": ")
+			}
 		}
 		http.Redirect(w, r, "/?authError="+url.QueryEscape(msg), http.StatusFound)
 		return
@@ -645,6 +649,13 @@ type accountJSON struct {
 	Provider string `json:"provider,omitempty"`
 	Locked   bool   `json:"locked"`
 	Created  int64  `json:"created"`
+	// Waiting: a Google account an admin added that hasn't signed in yet.
+	Waiting bool `json:"waiting,omitempty"`
+}
+
+func accountOf(x account.Account, now int64) accountJSON {
+	return accountJSON{x.ID, x.Email, string(x.Role), x.Enabled, string(x.MFA), x.AuthProvider, x.Locked(now), x.CreatedUnix,
+		x.External() && x.ExternalSubject == ""}
 }
 
 func (a *API) accounts(w http.ResponseWriter, r *http.Request) {
@@ -656,7 +667,7 @@ func (a *API) accounts(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().Unix()
 	out := make([]accountJSON, 0, len(list))
 	for _, x := range list {
-		out = append(out, accountJSON{x.ID, x.Email, string(x.Role), x.Enabled, string(x.MFA), x.AuthProvider, x.Locked(now), x.CreatedUnix})
+		out = append(out, accountOf(x, now))
 	}
 	writeJSON(w, out)
 }
@@ -681,4 +692,25 @@ func (a *API) changeAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) createAccount(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+		Google   bool   `json:"google"`
+		Role     string `json:"role"`
+	}
+	if !readJSON(w, r, &b) {
+		return
+	}
+	acc, err := a.Auth.CreateAccount(r.Context(), principal(r), app.NewAccount{Email: b.Email, Password: b.Password,
+		Google: b.Google, Role: account.Role(b.Role)})
+	if err != nil {
+		authFail(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(accountOf(acc, time.Now().Unix()))
 }

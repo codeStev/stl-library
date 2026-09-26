@@ -131,6 +131,9 @@ type AccountStore interface {
 	// (decided inside the store, atomically). ErrExists for a duplicate
 	// email.
 	CreateAccount(ctx context.Context, a account.Account) (account.Account, error)
+	// CreateFirstAccount inserts a as the admin only if there are no
+	// accounts yet (atomically); ErrExists otherwise.
+	CreateFirstAccount(ctx context.Context, a account.Account) (account.Account, error)
 	AccountByEmail(ctx context.Context, email string) (account.Account, error)
 	AccountByID(ctx context.Context, id string) (account.Account, error)
 	AccountByExternal(ctx context.Context, provider, subject string) (account.Account, error)
@@ -209,6 +212,11 @@ type Auth struct {
 	Passkeys Passkeys // may be disabled
 	Google   OIDC     // may be disabled
 	Now      func() time.Time
+	// ClosedRegistration: after the first account, only admins create
+	// accounts.
+	ClosedRegistration bool
+	// Notify is told about new self-registered accounts; may be nil.
+	Notify *Notifications
 
 	dummyOnce sync.Once
 	dummyHash string
@@ -230,6 +238,40 @@ func (a *Auth) dummy() string {
 
 // ---- registration and password login ----
 
+// ErrRegistrationClosed: only admins create accounts.
+var ErrRegistrationClosed = fmt.Errorf("%w: registration is closed - ask an admin for an account", ErrForbidden)
+
+// RegistrationOpen reports whether anyone may create an account (always
+// true while there are none).
+func (a *Auth) RegistrationOpen(ctx context.Context) bool {
+	if !a.ClosedRegistration {
+		return true
+	}
+	all, err := a.Accounts.ListAccounts(ctx)
+	return err == nil && len(all) == 0
+}
+
+// create inserts a self-registered account (only the first one when
+// registration is closed) and tells the admins.
+func (a *Auth) create(ctx context.Context, acc account.Account) (account.Account, error) {
+	var err error
+	if a.ClosedRegistration {
+		acc, err = a.Accounts.CreateFirstAccount(ctx, acc)
+		if errors.Is(err, ErrExists) {
+			return acc, ErrRegistrationClosed
+		}
+	} else {
+		acc, err = a.Accounts.CreateAccount(ctx, acc)
+	}
+	if err == nil && a.Notify != nil {
+		// In the background: the answer must not take longer for a new
+		// email than for a taken one.
+		go a.Notify.Notify(context.WithoutCancel(ctx), Notification{Event: EventAccountRegistered, Title: "New account",
+			Message: fmt.Sprintf("%s created an account (%s).", acc.Email, strings.ToLower(string(acc.Role)))})
+	}
+	return acc, err
+}
+
 // Register creates an account. It answers the same way (nil) whether the
 // email was free or taken, and costs the same either way; the caller must
 // never sign the user in from it.
@@ -245,7 +287,7 @@ func (a *Auth) Register(ctx context.Context, email, password string) error {
 	if err != nil {
 		return err
 	}
-	_, err = a.Accounts.CreateAccount(ctx, account.Account{ID: newID(), Email: email, PasswordHash: hash,
+	_, err = a.create(ctx, account.Account{ID: newID(), Email: email, PasswordHash: hash,
 		Role: account.User, Enabled: true, CreatedUnix: a.now().Unix()})
 	if errors.Is(err, ErrExists) {
 		return nil // same answer as a new account
@@ -764,6 +806,49 @@ func (a *Auth) ListAccounts(ctx context.Context, p Principal) ([]account.Account
 	return a.Accounts.ListAccounts(ctx)
 }
 
+// NewAccount is an account an admin creates: with a password, or for a
+// Google address (bound at its first Google sign-in).
+type NewAccount struct {
+	Email    string
+	Password string
+	Google   bool
+	Role     account.Role
+}
+
+// CreateAccount lets an admin add an account (also when registration is
+// closed). The new user sets up the second factor at the first sign-in.
+func (a *Auth) CreateAccount(ctx context.Context, p Principal, n NewAccount) (account.Account, error) {
+	if err := a.admin(p); err != nil {
+		return account.Account{}, err
+	}
+	email, err := account.NormalizeEmail(n.Email)
+	if err != nil {
+		return account.Account{}, fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	if n.Role != account.Admin && n.Role != account.User {
+		return account.Account{}, fmt.Errorf("%w: unknown role", ErrInvalid)
+	}
+	acc := account.Account{ID: newID(), Email: email, Role: n.Role, Enabled: true, CreatedUnix: a.now().Unix()}
+	if n.Google {
+		if !a.GoogleEnabled() {
+			return acc, fmt.Errorf("%w: Google sign-in is not set up on this server", ErrInvalid)
+		}
+		acc.AuthProvider = "google"
+	} else {
+		if err := account.CheckPassword(n.Password); err != nil {
+			return acc, fmt.Errorf("%w: %v", ErrInvalid, err)
+		}
+		if acc.PasswordHash, err = a.Hasher.Hash(n.Password); err != nil {
+			return acc, err
+		}
+	}
+	created, err := a.Accounts.CreateAccount(ctx, acc)
+	if errors.Is(err, ErrExists) {
+		return acc, fmt.Errorf("%w: %s already has an account", ErrConflict, email)
+	}
+	return created, err
+}
+
 // AccountChange is an administrative change; nil fields stay.
 type AccountChange struct {
 	Role        *account.Role
@@ -888,13 +973,20 @@ func (a *Auth) FinishGoogle(ctx context.Context, state, code string) (string, er
 		if eerr != nil {
 			return "", fmt.Errorf("%w: %v", ErrUnauthorized, eerr)
 		}
-		if _, err := a.Accounts.AccountByEmail(ctx, email); err == nil {
+		existing, xerr := a.Accounts.AccountByEmail(ctx, email)
+		switch {
+		case xerr == nil && existing.AuthProvider == "google" && existing.ExternalSubject == "":
+			// An admin added this Google address: the first sign-in binds it.
+			existing.ExternalSubject = id.Subject
+			acc, err = existing, a.Accounts.SaveAccount(ctx, existing)
+		case xerr == nil:
 			return "", fmt.Errorf("%w: %s already has an account that signs in with a password", ErrConflict, email)
-		}
-		acc, err = a.Accounts.CreateAccount(ctx, account.Account{ID: newID(), Email: email, AuthProvider: "google",
-			ExternalSubject: id.Subject, Role: account.User, Enabled: true, CreatedUnix: a.now().Unix()})
-		if errors.Is(err, ErrExists) {
-			return "", fmt.Errorf("%w: %s already has an account", ErrConflict, email)
+		default:
+			acc, err = a.create(ctx, account.Account{ID: newID(), Email: email, AuthProvider: "google",
+				ExternalSubject: id.Subject, Role: account.User, Enabled: true, CreatedUnix: a.now().Unix()})
+			if errors.Is(err, ErrExists) {
+				return "", fmt.Errorf("%w: %s already has an account", ErrConflict, email)
+			}
 		}
 	}
 	if err != nil {

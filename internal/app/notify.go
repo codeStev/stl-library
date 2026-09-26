@@ -16,10 +16,12 @@ const (
 	EventPrintError   = "print.error"
 	EventImportDone   = "import.done"
 	EventImportFailed = "import.failed"
+	// EventAccountRegistered: someone created an account themselves.
+	EventAccountRegistered = "account.registered"
 )
 
 // AllEvents in display order.
-var AllEvents = []string{EventPrintDone, EventPrintStopped, EventPrintError, EventImportDone, EventImportFailed}
+var AllEvents = []string{EventPrintDone, EventPrintStopped, EventPrintError, EventImportDone, EventImportFailed, EventAccountRegistered}
 
 // Notification is one message.
 type Notification struct {

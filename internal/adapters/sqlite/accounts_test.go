@@ -28,6 +28,15 @@ func TestAccountStore(t *testing.T) {
 	if _, err := s.CreateAccount(ctx, account.Account{ID: "a3", Email: "a@x.org"}); err != app.ErrExists {
 		t.Errorf("duplicate email: %v", err)
 	}
+	if _, err := s.CreateFirstAccount(ctx, account.Account{ID: "a4", Email: "c@x.org"}); err != app.ErrExists {
+		t.Errorf("second 'first' account: %v", err)
+	}
+	// Google accounts added by an admin wait without a subject.
+	for _, id := range []string{"p1", "p2"} {
+		if _, err := s.CreateAccount(ctx, account.Account{ID: id, Email: id + "@x.org", AuthProvider: "google"}); err != nil {
+			t.Fatalf("placeholder %s: %v", id, err)
+		}
+	}
 	g1 := account.Account{ID: "g1", Email: "g@x.org", AuthProvider: "google", ExternalSubject: "sub", Enabled: true}
 	if _, err := s.CreateAccount(ctx, g1); err != nil {
 		t.Fatal(err)
@@ -46,7 +55,7 @@ func TestAccountStore(t *testing.T) {
 	if a, _ := s.AccountByID(ctx, "a1"); a.MFA != account.MFATOTP || a.TokenVersion != 3 || a.Role != account.Admin {
 		t.Errorf("saved: %+v", a)
 	}
-	if all, _ := s.ListAccounts(ctx); len(all) != 3 {
+	if all, _ := s.ListAccounts(ctx); len(all) != 5 {
 		t.Errorf("roster: %d", len(all))
 	}
 

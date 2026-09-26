@@ -32,6 +32,16 @@ func uniqueViolation(err error) bool {
 // the same transaction, so two simultaneous first registrations can't both
 // be admins).
 func (s *Store) CreateAccount(ctx context.Context, a account.Account) (account.Account, error) {
+	return s.createAccount(ctx, a, false)
+}
+
+// CreateFirstAccount inserts a as the admin only if there is no account
+// yet.
+func (s *Store) CreateFirstAccount(ctx context.Context, a account.Account) (account.Account, error) {
+	return s.createAccount(ctx, a, true)
+}
+
+func (s *Store) createAccount(ctx context.Context, a account.Account, onlyFirst bool) (account.Account, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return a, err
@@ -40,6 +50,9 @@ func (s *Store) CreateAccount(ctx context.Context, a account.Account) (account.A
 	var n int
 	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM account`).Scan(&n); err != nil {
 		return a, err
+	}
+	if n > 0 && onlyFirst {
+		return a, app.ErrExists
 	}
 	if n == 0 {
 		a.Role = account.Admin
