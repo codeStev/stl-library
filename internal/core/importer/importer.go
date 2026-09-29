@@ -568,5 +568,53 @@ func NotAModel(u Unit) bool {
 	return len(named) == 0 || allExtra(named)
 }
 
-// IsArchive reports zip archives, which are expanded on import.
-func IsArchive(name string) bool { return ext(name) == "zip" }
+// IsArchive reports archives that are expanded on import (see ArchiveKind).
+func IsArchive(name string) bool { return ArchiveKind(name) != "" }
+
+var (
+	reRarPart   = regexp.MustCompile(`(?i)\.part0*(\d+)\.rar$`)
+	reOldVolume = regexp.MustCompile(`(?i)\.r\d{2,3}$`)
+	re7zVolume  = regexp.MustCompile(`(?i)\.7z\.0*(\d+)$`)
+)
+
+// ArchiveKind names the archive format of a file by its name: "zip",
+// "7z" or "rar" (the first volume of a split archive included), else "".
+func ArchiveKind(name string) string {
+	lower := strings.ToLower(name)
+	switch {
+	case IsVolumePart(name):
+		return ""
+	case strings.HasSuffix(lower, ".zip"):
+		return "zip"
+	case strings.HasSuffix(lower, ".7z"), re7zVolume.MatchString(lower):
+		return "7z"
+	case strings.HasSuffix(lower, ".rar"):
+		return "rar"
+	}
+	return ""
+}
+
+// IsVolumePart reports a later volume of a split archive ("x.part2.rar",
+// "x.r00", "x.7z.002"): the first volume's extraction reads it, it is no
+// archive of its own.
+func IsVolumePart(name string) bool {
+	if m := reRarPart.FindStringSubmatch(name); m != nil {
+		return m[1] != "1"
+	}
+	if m := re7zVolume.FindStringSubmatch(name); m != nil {
+		return m[1] != "1"
+	}
+	return reOldVolume.MatchString(name)
+}
+
+// ArchiveBase is an archive's path without its extension and volume
+// marker: "a/x.part1.rar" -> "a/x", "a/x.7z.001" -> "a/x".
+func ArchiveBase(rel string) string {
+	if b := re7zVolume.ReplaceAllString(rel, ""); b != rel {
+		return b
+	}
+	if b := reRarPart.ReplaceAllString(rel, ""); b != rel {
+		return b
+	}
+	return strings.TrimSuffix(rel, path.Ext(rel))
+}

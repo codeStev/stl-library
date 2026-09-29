@@ -105,6 +105,13 @@ With `IMPORT_SOURCE` set, `stlib serve` looks at that folder every
   file names (`…_pre_supported_lys.zip`, `(Chitubox Pre Supported)`,
   `Presupports/1-10 Scale_Split`), zips are unpacked, images and documents
   go next to the model. A wrong guess can be fixed in the UI (fix label).
+- **Archives:** zip archives are unpacked on import. `.7z` and `.rar`
+  (also split volumes) are unpacked too where the `7z` and `unrar` programs
+  are installed (found on the `PATH`, or `SEVENZIP_BIN` / `UNRAR_BIN`); the
+  Docker image has neither, so there they stay plain files. An archive is
+  unpacked once, as a whole, into `IMPORT_TMP` (default: the system's temp
+  folder - it needs room for the largest archive); passworded or damaged
+  archives wait and are reported on the Imports page.
 - **Busts:** a bust shipped separately in a `Busts` folder (`<creator>/Busts/<model>`,
   or inside a release folder) is imported as the `Bust` scale of the model
   of that name, into the existing model folder; its render images go to the
@@ -251,6 +258,7 @@ LIBRARY_ROOT=/path/to/library DATA_DIR=./data stlib serve
 | `PRINTER_DISCOVERY_PORT` | `3000` | the printer's discovery port, if it differs |
 | `IMPORT_INTERVAL` | `1h` | time between imports (at least `1m`) |
 | `IMPORT_SETTLE` | `1h` | how long a download folder must be unchanged to count as complete |
+| `IMPORT_TMP` | system temp | where 7z/rar archives are unpacked during an import |
 | `IMPORT_DELETE` | `false` | `true`: remove imported folders from the downloads once verified in the library |
 | `APP_SECRET` | (generated) | at least 32 characters; else `DATA_DIR/secret.key` is created |
 | `PUBLIC_URL` | (off) | the address users open the app at; turns on passkeys (and Google) |

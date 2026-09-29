@@ -22,6 +22,12 @@ import (
 // reads, except for Remove (imported folders, when asked to).
 type Downloads struct {
 	Root string
+	// SevenZip and Unrar are the programs that read 7z and rar archives
+	// (empty: those stay plain files); TempDir is where an archive is
+	// unpacked (default: the system's temp folder) - it needs room for
+	// the largest archive.
+	SevenZip, Unrar string
+	TempDir         string
 }
 
 func (d Downloads) List(ctx context.Context) ([]importer.File, error) {
@@ -60,21 +66,33 @@ func (d Downloads) unitPath(unit, rel string) string {
 
 // Expand replaces zip archives by their entries: an entry "foo\bar.stl"
 // of "sub/x.zip" becomes "sub/x/foo/bar.stl".
-func (d Downloads) Expand(_ context.Context, unit string, files []importer.File) ([]importer.File, error) {
+func (d Downloads) Expand(ctx context.Context, unit string, files []importer.File) ([]importer.File, error) {
 	var out []importer.File
 	for _, f := range files {
 		if f.Hidden {
 			continue
 		}
-		if !importer.IsArchive(f.Rel) {
-			out = append(out, f)
+		kind := importer.ArchiveKind(f.Rel)
+		if kind != "" && kind != "zip" && d.tool(kind) != "" {
+			entries, err := d.expandExternal(ctx, unit, f, kind)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, entries...)
+			continue
+		}
+		if importer.IsVolumePart(f.Rel) && (d.tool("rar") != "" || d.tool("7z") != "") {
+			continue // read together with its first volume
+		}
+		if kind != "zip" {
+			out = append(out, f) // no reader for it: a plain file
 			continue
 		}
 		zr, err := zip.OpenReader(d.unitPath(unit, f.Rel))
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", f.Rel, err)
 		}
-		base := strings.TrimSuffix(f.Rel, path.Ext(f.Rel))
+		base := importer.ArchiveBase(f.Rel)
 		for _, e := range zr.File {
 			if e.FileInfo().IsDir() {
 				continue
@@ -130,7 +148,13 @@ func (d Downloads) Each(ctx context.Context, unit string, files []importer.File,
 		}
 	}
 	for archive, entries := range byArchive {
-		if err := d.eachEntry(ctx, unit, archive, entries, fn); err != nil {
+		var err error
+		if kind := importer.ArchiveKind(archive); kind == "7z" || kind == "rar" {
+			err = d.eachExternal(ctx, unit, archive, entries, fn)
+		} else {
+			err = d.eachEntry(ctx, unit, archive, entries, fn)
+		}
+		if err != nil {
 			return err
 		}
 	}

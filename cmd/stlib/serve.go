@@ -84,7 +84,8 @@ func serve(ctx context.Context, root, data, listen string, every time.Duration, 
 	api.Scan = scanStatus
 	var importer *app.Importer
 	if imp != nil {
-		importer = &app.Importer{Downloads: disk.Downloads{Root: imp.source}, Library: disk.LibraryWriter{Root: root}, Log: store, Settle: imp.settle,
+		logArchiveTools(newDownloads(imp.source))
+		importer = &app.Importer{Downloads: newDownloads(imp.source), Library: disk.LibraryWriter{Root: root}, Log: store, Settle: imp.settle,
 			DeleteImported: imp.delete}
 		api.Importer = importer
 		go importLoop(ctx, importer, notifications, imp.every, scanStatus)

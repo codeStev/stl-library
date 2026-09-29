@@ -142,7 +142,7 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 			return err
 		}
 		defer s.Close()
-		im := &app.Importer{Downloads: disk.Downloads{Root: *source}, Library: disk.LibraryWriter{Root: rest[0]}, Log: s, Settle: settleFor,
+		im := &app.Importer{Downloads: newDownloads(*source), Library: disk.LibraryWriter{Root: rest[0]}, Log: s, Settle: settleFor,
 			DeleteImported: *importDelete, AdoptExisting: *importAdopt}
 		if *dryRun {
 			return printPreview(ctx, out, im)

@@ -253,3 +253,26 @@ func TestBustsBelongToTheirModelAsTheBustScale(t *testing.T) {
 		t.Errorf("Busts subfolder: %s", p[0].Target)
 	}
 }
+
+func TestArchiveKindsAndVolumes(t *testing.T) {
+	kinds := map[string]string{
+		"a.zip": "zip", "A.ZIP": "zip", "a.7z": "7z", "a.rar": "rar", "a.part1.rar": "rar", "a.part01.rar": "rar",
+		"a.7z.001": "7z", "a.stl": "", "a.part2.rar": "", "a.r00": "", "a.r12": "", "a.7z.002": "", "readme.txt": "", "a.tar.gz": "",
+	}
+	for name, want := range kinds {
+		if got := ArchiveKind(name); got != want {
+			t.Errorf("ArchiveKind(%q) = %q, want %q", name, got, want)
+		}
+	}
+	for name, want := range map[string]bool{"a.part2.rar": true, "a.part10.rar": true, "a.part1.rar": false, "a.part01.rar": false,
+		"a.r00": true, "a.7z.002": true, "a.7z.001": false, "a.rar": false, "a.zip": false} {
+		if got := IsVolumePart(name); got != want {
+			t.Errorf("IsVolumePart(%q) = %v, want %v", name, got, want)
+		}
+	}
+	for in, want := range map[string]string{"d/x.part1.rar": "d/x", "d/x.rar": "d/x", "d/x.7z.001": "d/x", "d/x.7z": "d/x", "d/x.zip": "d/x", "x.part01.rar": "x"} {
+		if got := ArchiveBase(in); got != want {
+			t.Errorf("ArchiveBase(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
