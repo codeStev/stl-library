@@ -13,32 +13,48 @@ function loadFilters(): Filters {
   }
 }
 
-// Opening a model unmounts the grid. What was loaded and where the page was
-// scrolled is kept here, so "back" lands where the user left: the same
-// models (all the pages loaded so far) at the same scroll position.
-let remembered: { key: string; models: ModelSummary[]; more: boolean; scrollY: number } | null = null;
+function loadPage(): number {
+  const n = Number(sessionStorage.getItem("libpage"));
+  return Number.isInteger(n) && n > 0 ? n : 0;
+}
 
-// The library grid: search, filters (creator, tag, printed), previews,
-// "load more" paging. Filters live in sessionStorage so going back to the
-// grid keeps them.
+// The library grid: search, filters (creator, tag, collection, printed),
+// previews and numbered pages. Filters, page and scroll position live in
+// sessionStorage, so going back from a model lands on the same page at the
+// same place.
 export function Library() {
   const [f, setF] = useState<Filters>(loadFilters);
+  const [page, setPage] = useState(loadPage);
   const [creators, setCreators] = useState<Creator[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
   const [collections, setCollections] = useState<Collection[]>([]);
-  const back = remembered && remembered.key === JSON.stringify(loadFilters()) ? remembered : null;
-  const [models, setModels] = useState<ModelSummary[]>(back?.models ?? []);
-  const [more, setMore] = useState(back?.more ?? false);
-  const restore = useRef<number | null>(back ? back.scrollY : null); // scroll position to put back
-  const comingBack = useRef(back !== null); // the first load after "back" refreshes what was shown
-  const latest = useRef({ f, models, more });
-  latest.current = { f, models, more };
+  const [models, setModels] = useState<ModelSummary[]>([]);
+  const [total, setTotal] = useState(0);
+  const scroll = useRef(0); // where the page is scrolled, kept up to date for the moment we leave
+  // The scroll position to put back once the page it belongs to has loaded.
+  const restore = useRef<{ key: string; y: number } | null>(
+    (() => {
+      try {
+        return JSON.parse(sessionStorage.getItem("libscroll") ?? "null");
+      } catch {
+        return null;
+      }
+    })(),
+  );
   const [error, setError] = useState("");
   const [selecting, setSelecting] = useState(false);
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [note, setNote] = useState("");
-  const seq = useRef(0);
-  const set = (patch: Partial<Filters>) => setF((prev) => ({ ...prev, ...patch }));
+  // A changed filter starts at the first page.
+  const set = (patch: Partial<Filters>) => {
+    setF((prev) => ({ ...prev, ...patch }));
+    setPage(0);
+  };
+  const pages = Math.max(1, Math.ceil(total / PAGE));
+  const goto = (n: number) => {
+    setPage(Math.min(Math.max(n, 0), pages - 1));
+    window.scrollTo(0, 0);
+  };
 
   useEffect(() => {
     api.creators().then(setCreators, (e) => setError(String(e)));
@@ -46,46 +62,55 @@ export function Library() {
     api.collections().then(setCollections, () => {});
   }, []);
 
+  const load = () =>
+    api.modelsPage(f, page * PAGE, PAGE).then(
+      (r) => {
+        setModels(r.items);
+        setTotal(r.total);
+        if (r.items.length === 0 && r.total > 0) setPage(Math.max(0, Math.ceil(r.total / PAGE) - 1)); // the page is gone (fewer results now)
+      },
+      (e) => setError(String(e)),
+    );
+
+  const seq = useRef(0);
   useEffect(() => {
     sessionStorage.setItem("filters", JSON.stringify(f));
+    sessionStorage.setItem("libpage", String(page));
     const mine = ++seq.current;
-    // Coming back with the same filters: refresh as many models as were shown.
-    // Coming back: refresh as many models as were shown, so the page keeps its length.
-    // The server returns at most 500 at once: beyond that the remembered list stays as it is.
-    const back = comingBack.current;
-    comingBack.current = false;
-    if (back && models.length > 500) return;
-    const keep = back ? Math.min(Math.max(models.length, PAGE), 500) : PAGE;
     const t = setTimeout(() => {
-      api.models(f, 0, keep).then(
-        (ms) => {
+      api.modelsPage(f, page * PAGE, PAGE).then(
+        (r) => {
           if (mine !== seq.current) return; // a newer search is on its way
-          setModels(ms);
-          setMore(ms.length === keep);
+          setModels(r.items);
+          setTotal(r.total);
+          if (r.items.length === 0 && r.total > 0) setPage(Math.max(0, Math.ceil(r.total / PAGE) - 1));
         },
         (e) => setError(String(e)),
       );
-    }, back ? 0 : 200);
+    }, 150);
     return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [f]);
+  }, [f, page]);
 
-  // Put the page back where it was once the remembered models are on screen.
+  // Put the page back where it was, once, when the page it was scrolled on has loaded.
+  const key = JSON.stringify([f, page]);
   useLayoutEffect(() => {
-    if (restore.current !== null && models.length > 0) {
-      window.scrollTo(0, restore.current);
+    if (restore.current && models.length > 0) {
+      if (restore.current.key === key) window.scrollTo(0, restore.current.y);
       restore.current = null;
     }
   }, [models]);
 
-  // Remember the state when leaving the grid.
-  useEffect(
-    () => () => {
-      const { f, models, more } = latest.current;
-      remembered = { key: JSON.stringify(f), models, more, scrollY: window.scrollY };
-    },
-    [],
-  );
+  // Remember the scroll position for coming back.
+  useEffect(() => {
+    const on = () => (scroll.current = window.scrollY);
+    addEventListener("scroll", on, { passive: true });
+    return () => {
+      removeEventListener("scroll", on);
+      sessionStorage.setItem("libscroll", JSON.stringify({ key: latestKey.current, y: scroll.current }));
+    };
+  }, []);
+  const latestKey = useRef(key);
+  latestKey.current = key;
 
   const toggle = (id: number) =>
     setPicked((prev) => {
@@ -106,7 +131,7 @@ export function Library() {
         setNote(`${add.length ? `Added “${add.join("”, “")}”` : `Removed “${remove.join("”, “")}”`} on ${picked.size} model${picked.size === 1 ? "" : "s"}`);
         setError("");
         api.tags().then(setTags, () => {});
-        return api.models(f, 0, Math.max(models.length, PAGE)).then(setModels);
+        return load();
       },
       (e) => setError(String(e)),
     );
@@ -130,16 +155,21 @@ export function Library() {
         setNote(`Removed ${picked.size} model${picked.size === 1 ? "" : "s"} from this collection`);
         setPicked(new Set());
         api.collections().then(setCollections, () => {});
-        return api.models(f, 0, Math.max(models.length, PAGE)).then(setModels);
+        return load();
       },
       (e) => setError(String(e)),
     );
 
-  const loadMore = () =>
-    api.models(f, models.length, PAGE).then((ms) => {
-      setModels((prev) => [...prev, ...ms]);
-      setMore(ms.length === PAGE);
-    });
+  // Select every model of the search, not only this page.
+  const selectAllResults = async () => {
+    try {
+      const ids: number[] = [];
+      for (let off = 0; off < total; off += 500) ids.push(...(await api.modelsPage(f, off, 500)).items.map((m) => m.id));
+      setPicked(new Set(ids));
+    } catch (e) {
+      setError(String(e));
+    }
+  };
 
   return (
     <>
@@ -193,12 +223,24 @@ export function Library() {
         </label>
       </div>
       {error && <p className="error">{error}</p>}
+      <div className="resultbar">
+        <span className="muted">
+          {total.toLocaleString()} model{total === 1 ? "" : "s"}
+          {pages > 1 && ` · page ${page + 1} of ${pages}`}
+        </span>
+        <Pager page={page} pages={pages} onPage={goto} />
+      </div>
       {selecting && (
         <div className="bulkbar">
           <strong>{picked.size} selected</strong>
           <button className="link" onClick={() => setPicked(new Set(models.map((m) => m.id)))}>
-            all {models.length} shown
+            this page ({models.length})
           </button>
+          {total > models.length && (
+            <button className="link" onClick={selectAllResults}>
+              all {total} results
+            </button>
+          )}
           <button className="link" onClick={() => setPicked(new Set())} disabled={picked.size === 0}>
             none
           </button>
@@ -275,11 +317,42 @@ export function Library() {
         ))}
       </div>
       {models.length === 0 && !error && <p className="empty">No models found.</p>}
-      {more && (
-        <button className="more" onClick={loadMore}>
-          Load more
-        </button>
-      )}
+      <Pager page={page} pages={pages} onPage={goto} />
     </>
+  );
+}
+
+// Pager shows numbered pages: the first, the last and a few around the
+// current one, with gaps as "…".
+function Pager({ page, pages, onPage }: { page: number; pages: number; onPage: (n: number) => void }) {
+  if (pages <= 1) return null;
+  const shown = [...new Set([0, 1, page - 2, page - 1, page, page + 1, page + 2, pages - 2, pages - 1])]
+    .filter((n) => n >= 0 && n < pages)
+    .sort((a, b) => a - b);
+  const items: (number | "gap")[] = [];
+  shown.forEach((n, i) => {
+    if (i > 0 && n - shown[i - 1] > 1) items.push("gap");
+    items.push(n);
+  });
+  return (
+    <nav className="pager" aria-label="Pages">
+      <button className="chip" disabled={page === 0} onClick={() => onPage(page - 1)} aria-label="Previous page">
+        ‹
+      </button>
+      {items.map((n, i) =>
+        n === "gap" ? (
+          <span key={`g${i}`} className="muted">
+            …
+          </span>
+        ) : (
+          <button key={n} className={`chip${n === page ? " active" : ""}`} onClick={() => onPage(n)} aria-current={n === page ? "page" : undefined}>
+            {n + 1}
+          </button>
+        ),
+      )}
+      <button className="chip" disabled={page === pages - 1} onClick={() => onPage(page + 1)} aria-label="Next page">
+        ›
+      </button>
+    </nav>
   );
 }

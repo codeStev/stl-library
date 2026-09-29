@@ -794,3 +794,24 @@ func TestCollectionsHoldModelsAndAModelCanBeInSeveral(t *testing.T) {
 		t.Errorf("after delete: %d models, %+v", len(all), list)
 	}
 }
+
+func TestSearchReportsTheTotalIgnoringThePage(t *testing.T) {
+	srv := server(t)
+	total := func(path string) string {
+		t.Helper()
+		resp, _ := get(t, srv, path)
+		return resp.Header.Get("X-Total-Count")
+	}
+	if got := total("/api/models"); got != "2" {
+		t.Errorf("all: %q", got)
+	}
+	if got := total("/api/models?limit=1&offset=1"); got != "2" {
+		t.Errorf("a page of one still reports the total: %q", got)
+	}
+	if got := total("/api/models?q=bell"); got != "1" {
+		t.Errorf("search: %q", got)
+	}
+	if got := total("/api/models?creator=Nobody"); got != "0" {
+		t.Errorf("none: %q", got)
+	}
+}

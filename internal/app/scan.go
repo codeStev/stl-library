@@ -14,6 +14,8 @@ import (
 type Store interface {
 	Sync(ctx context.Context, models []*library.Model, issues []library.Issue) (SyncStats, error)
 	Search(ctx context.Context, q Query) ([]ModelSummary, error)
+	// CountModels is how many models a query matches, ignoring its paging.
+	CountModels(ctx context.Context, q Query) (int, error)
 	Model(ctx context.Context, id int64) (*ModelDetail, error)
 	Creators(ctx context.Context) ([]CreatorCount, error)
 	Issues(ctx context.Context) ([]library.Issue, error)

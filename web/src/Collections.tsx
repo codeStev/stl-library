@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type Collection } from "./api";
+import { api, showLibrary, type Collection } from "./api";
 
 // The collections page: make, rename and delete collections. A collection
 // opens as the library filtered to it; models are added from the library
@@ -24,7 +24,7 @@ export function Collections() {
       (e) => setError(String(e).includes("409") ? "A collection with that name exists already." : String(e)),
     );
   const open = (c: Collection) => {
-    sessionStorage.setItem("filters", JSON.stringify({ q: "", creator: "", tag: "", collection: String(c.id), printed: "", hidden: "" }));
+    showLibrary({ collection: String(c.id) });
     location.hash = "#/";
   };
   return (

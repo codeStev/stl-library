@@ -219,6 +219,12 @@ func (a *API) searchModels(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	total, err := a.Store.CountModels(r.Context(), query)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	w.Header().Set("X-Total-Count", strconv.Itoa(total))
 	out := make([]modelSummary, 0, len(hits))
 	for _, h := range hits {
 		out = append(out, summary(h))

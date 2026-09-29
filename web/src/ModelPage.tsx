@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { api, DIM_VALUES, displayName, formatBytes, formatDate, isSliced, printable, type DimKey, type FileRef, type Collection, type ModelDetail, type PartLink, type Tag, type Variant } from "./api";
+import { api, DIM_VALUES, displayName, formatBytes, formatDate, isSliced, printable, showLibrary, type DimKey, type FileRef, type Collection, type ModelDetail, type PartLink, type Tag, type Variant } from "./api";
 import { SliceEditor } from "./SliceEditor";
 import { TagPicker } from "./TagPicker";
 
@@ -98,7 +98,7 @@ export function ModelPage({ id }: { id: number }) {
         <a
           href="#/"
           onClick={() =>
-            sessionStorage.setItem("filters", JSON.stringify({ q: "", creator: m.creator, tag: "", collection: "", printed: "", hidden: "" }))
+            showLibrary({ creator: m.creator })
           }
         >
           {m.creator}
@@ -334,7 +334,7 @@ function CollectionEditor({ m, act }: { m: ModelDetail; act: Act }) {
         <span key={c.id} className="tag">
           <a
             href="#/"
-            onClick={() => sessionStorage.setItem("filters", JSON.stringify({ q: "", creator: "", tag: "", collection: String(c.id), printed: "", hidden: "" }))}
+            onClick={() => showLibrary({ collection: String(c.id) })}
           >
             {c.name}
           </a>

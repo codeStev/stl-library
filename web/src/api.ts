@@ -244,6 +244,14 @@ export const displayName = (m: { name: string; displayName?: string }) => m.disp
 export const api = {
   models: (f: Filters, offset: number, limit = 60) =>
     get<ModelSummary[]>(`/api/models?${new URLSearchParams({ ...f, offset: String(offset), limit: String(limit) })}`),
+  // One page of models with the total number the filters match.
+  modelsPage: async (f: Filters, offset: number, limit: number) => {
+    const r = await fetch(`/api/models?${new URLSearchParams({ ...f, offset: String(offset), limit: String(limit) })}`);
+    if (r.status === 401) signedOut();
+    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+    const items = (await r.json()) as ModelSummary[];
+    return { items, total: Number(r.headers.get("X-Total-Count") ?? items.length) };
+  },
   tags: () => get<Tag[]>("/api/tags"),
   setTags: (modelId: number, tags: string[]) => send<{ tags: string[] }>("PUT", `/api/models/${modelId}/tags`, { tags }),
   editTags: (ids: number[], add: string[], remove: string[]) =>
@@ -303,3 +311,14 @@ export function formatBytes(n: number): string {
 }
 
 export const formatDate = (unix: number) => new Date(unix * 1000).toLocaleDateString();
+
+// showLibrary makes the library open with these filters, on its first page.
+export function showLibrary(f: Partial<Filters>) {
+  try {
+    sessionStorage.setItem("filters", JSON.stringify({ q: "", creator: "", tag: "", collection: "", printed: "", hidden: "", ...f }));
+    sessionStorage.setItem("libpage", "0");
+    sessionStorage.removeItem("libscroll");
+  } catch {
+    /* no storage: the library opens unfiltered */
+  }
+}

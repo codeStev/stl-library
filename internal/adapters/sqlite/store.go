@@ -378,10 +378,46 @@ func syncIssues(ctx context.Context, tx *sql.Tx, issues []library.Issue) error {
 // Search matches every word as a prefix against name, creator, release
 // and category, best matches first.
 func (s *Store) Search(ctx context.Context, q app.Query) ([]app.ModelSummary, error) {
-	var where []string
-	var args []any
-	from := `model m`
-	order := `m.creator, m.release, coalesce(nullif((SELECT display_name FROM model_user u WHERE u.dir = m.dir), ''), m.name) COLLATE NOCASE`
+	from, where, args, order := searchParts(q)
+	query := `SELECT ` + summaryCols + ` FROM ` + from
+	if len(where) > 0 {
+		query += ` WHERE ` + strings.Join(where, ` AND `)
+	}
+	query += ` ORDER BY ` + order + ` LIMIT ? OFFSET ?`
+	args = append(args, q.Limit, q.Offset)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []app.ModelSummary
+	for rows.Next() {
+		var m app.ModelSummary
+		if err := scanSummary(rows, &m); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// CountModels is the number of models a query matches (ignoring paging).
+func (s *Store) CountModels(ctx context.Context, q app.Query) (int, error) {
+	from, where, args, _ := searchParts(q)
+	query := `SELECT count(*) FROM ` + from
+	if len(where) > 0 {
+		query += ` WHERE ` + strings.Join(where, ` AND `)
+	}
+	var n int
+	err := s.db.QueryRowContext(ctx, query, args...).Scan(&n)
+	return n, err
+}
+
+// searchParts builds what Search and CountModels share: the tables, the
+// conditions with their arguments, and the order.
+func searchParts(q app.Query) (from string, where []string, args []any, order string) {
+	from = `model m`
+	order = `m.creator, m.release, coalesce(nullif((SELECT display_name FROM model_user u WHERE u.dir = m.dir), ''), m.name) COLLATE NOCASE`
 	if match := ftsQuery(q.Text); match != "" {
 		from = `model_fts f JOIN model m ON m.id = f.rowid`
 		where = append(where, `model_fts MATCH ?`)
@@ -410,26 +446,7 @@ func (s *Store) Search(ctx context.Context, q app.Query) ([]app.ModelSummary, er
 		}
 		where = append(where, not+`EXISTS (SELECT 1 FROM print pr WHERE pr.dir = m.dir)`)
 	}
-	query := `SELECT ` + summaryCols + ` FROM ` + from
-	if len(where) > 0 {
-		query += ` WHERE ` + strings.Join(where, ` AND `)
-	}
-	query += ` ORDER BY ` + order + ` LIMIT ? OFFSET ?`
-	args = append(args, q.Limit, q.Offset)
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []app.ModelSummary
-	for rows.Next() {
-		var m app.ModelSummary
-		if err := scanSummary(rows, &m); err != nil {
-			return nil, err
-		}
-		out = append(out, m)
-	}
-	return out, rows.Err()
+	return from, where, args, order
 }
 
 // ftsQuery turns free text into an FTS5 query: every word must match as a
