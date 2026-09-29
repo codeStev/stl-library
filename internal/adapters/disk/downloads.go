@@ -14,6 +14,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
+
+	"golang.org/x/text/encoding/charmap"
+	"golang.org/x/text/encoding/simplifiedchinese"
 
 	"github.com/codeStev/stl-library/internal/core/importer"
 )
@@ -97,7 +102,7 @@ func (d Downloads) Expand(ctx context.Context, unit string, files []importer.Fil
 			if e.FileInfo().IsDir() {
 				continue
 			}
-			name, ok := entryPath(e.Name)
+			name, ok := entryPath(decodeName(e.Name))
 			if !ok {
 				zr.Close()
 				return nil, fmt.Errorf("%s: unsafe entry %q", f.Rel, e.Name)
@@ -108,6 +113,32 @@ func (d Downloads) Expand(ctx context.Context, unit string, files []importer.Fil
 		zr.Close()
 	}
 	return out, nil
+}
+
+// decodeName makes an entry name valid UTF-8. Zips written by other
+// tools store names in the local code page without saying so: a name that
+// is no valid UTF-8 is read as GBK if that yields clean Chinese text, else
+// as CP437 (the zip format's own default).
+func decodeName(name string) string {
+	if utf8.ValidString(name) {
+		return name
+	}
+	if s, err := simplifiedchinese.GBK.NewDecoder().String(name); err == nil && utf8.ValidString(s) && hasHan(s) {
+		return s
+	}
+	if s, err := charmap.CodePage437.NewDecoder().String(name); err == nil {
+		return s
+	}
+	return strings.ToValidUTF8(name, "_")
+}
+
+func hasHan(s string) bool {
+	for _, r := range s {
+		if unicode.Is(unicode.Han, r) {
+			return true
+		}
+	}
+	return false
 }
 
 // entryPath cleans a zip entry name (Windows zips use backslashes) and

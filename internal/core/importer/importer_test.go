@@ -276,3 +276,15 @@ func TestArchiveKindsAndVolumes(t *testing.T) {
 		}
 	}
 }
+
+func TestScaleGluedToTheWordScale(t *testing.T) {
+	u := Unit{Creator: "Unbekannt", Path: "Unbekannt/Persephone", Name: "God Persephone - Mythology - KingSTL.com"}
+	var got []string
+	for _, p := range Placements(u, fs("Persephone/1-9scale Persephone .zip/arm_left.stl", "Persephone/1-12scale Persephone .zip/arm_left.stl"), "Unbekannt") {
+		got = append(got, p.Target)
+	}
+	sort.Strings(got)
+	if len(got) != 2 || !strings.Contains(got[0], "/1-12/") || !strings.Contains(got[1], "/1-9/") {
+		t.Errorf("targets: %v", got)
+	}
+}

@@ -185,3 +185,36 @@ func TestLibraryWriterHash(t *testing.T) {
 		t.Errorf("%s %v", h, err)
 	}
 }
+
+func TestNonUTF8EntryNamesAreDecoded(t *testing.T) {
+	gbk := "\xc5\xe7\xbb\xf0\xc1\xfa/original_left_leg.stl" // "喷火龙" in GBK
+	if got := decodeName(gbk); got != "喷火龙/original_left_leg.stl" {
+		t.Errorf("GBK: %q", got)
+	}
+	cp437 := "caf\x82.stl" // é in CP437, no valid GBK pair
+	if got := decodeName(cp437); got != "café.stl" {
+		t.Errorf("CP437: %q", got)
+	}
+	if got := decodeName("plain ünïcode.stl"); got != "plain ünïcode.stl" {
+		t.Errorf("valid UTF-8 changed: %q", got)
+	}
+	// End to end: an unflagged entry name in a real zip.
+	root := t.TempDir()
+	var b bytes.Buffer
+	zw := zip.NewWriter(&b)
+	w, _ := zw.CreateHeader(&zip.FileHeader{Name: gbk, Method: zip.Store})
+	w.Write([]byte("STL"))
+	zw.Close()
+	os.MkdirAll(filepath.Join(root, "u"), 0o755)
+	os.WriteFile(filepath.Join(root, "u", "x.zip"), b.Bytes(), 0o644)
+	d := Downloads{Root: root}
+	out, err := d.Expand(context.Background(), "u", []importer.File{{Rel: "x.zip"}})
+	if err != nil || len(out) != 1 || out[0].Rel != "x/喷火龙/original_left_leg.stl" {
+		t.Fatalf("%v %v", out, err)
+	}
+	var got string
+	err = d.Each(context.Background(), "u", out, func(f importer.File, r io.Reader) error { bb, _ := io.ReadAll(r); got = string(bb); return nil })
+	if err != nil || got != "STL" {
+		t.Errorf("read back: %q %v", got, err)
+	}
+}

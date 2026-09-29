@@ -309,9 +309,10 @@ func cleanFolder(s string) string {
 // ---- reading variant information from names ----
 
 var (
-	reWords  = regexp.MustCompile(`[A-Za-z]+|\d+(?:\.\d+)?`)
-	reMM     = regexp.MustCompile(`(?i)(\d+(?:\.\d+)?)\s?mm\b`)
-	reRatio  = regexp.MustCompile(`(?i)\b1\s?[-_/:]\s?(\d{1,2})\b`)
+	reWords = regexp.MustCompile(`[A-Za-z]+|\d+(?:\.\d+)?`)
+	reMM    = regexp.MustCompile(`(?i)(\d+(?:\.\d+)?)\s?mm\b`)
+	// 1:9, 1-9, 1_12 - also with "scale" glued on ("1-9scale").
+	reRatio  = regexp.MustCompile(`(?i)\b1\s?[-_/:]\s?(\d{1,2})(?:\b|scale\b)`)
 	reParens = regexp.MustCompile(`\(([^()]*)\)`)
 )
 
