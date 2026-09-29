@@ -29,7 +29,8 @@ export function Library() {
   const back = remembered && remembered.key === JSON.stringify(loadFilters()) ? remembered : null;
   const [models, setModels] = useState<ModelSummary[]>(back?.models ?? []);
   const [more, setMore] = useState(back?.more ?? false);
-  const restore = useRef<number | null>(back ? back.scrollY : null);
+  const restore = useRef<number | null>(back ? back.scrollY : null); // scroll position to put back
+  const comingBack = useRef(back !== null); // the first load after "back" refreshes what was shown
   const latest = useRef({ f, models, more });
   latest.current = { f, models, more };
   const [error, setError] = useState("");
@@ -49,7 +50,12 @@ export function Library() {
     sessionStorage.setItem("filters", JSON.stringify(f));
     const mine = ++seq.current;
     // Coming back with the same filters: refresh as many models as were shown.
-    const keep = restore.current !== null ? Math.max(models.length, PAGE) : PAGE;
+    // Coming back: refresh as many models as were shown, so the page keeps its length.
+    // The server returns at most 500 at once: beyond that the remembered list stays as it is.
+    const back = comingBack.current;
+    comingBack.current = false;
+    if (back && models.length > 500) return;
+    const keep = back ? Math.min(Math.max(models.length, PAGE), 500) : PAGE;
     const t = setTimeout(() => {
       api.models(f, 0, keep).then(
         (ms) => {
@@ -59,7 +65,7 @@ export function Library() {
         },
         (e) => setError(String(e)),
       );
-    }, restore.current !== null ? 0 : 200);
+    }, back ? 0 : 200);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [f]);
