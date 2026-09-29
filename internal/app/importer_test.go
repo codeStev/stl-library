@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"path"
 	"sort"
 	"strings"
 	"testing"
@@ -76,6 +77,17 @@ type fakeLibrary struct {
 	files   map[string]int64
 	content map[string]string // what was written (other files: unknown content)
 	corrupt bool              // Hash reports something else than was written
+}
+
+func (l *fakeLibrary) FindSame(_ context.Context, dir, name string, size int64) ([]string, error) {
+	var out []string
+	for p, sz := range l.files {
+		if strings.HasPrefix(p, dir+"/") && path.Base(p) == name && sz == size {
+			out = append(out, p)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 func (l *fakeLibrary) Hash(_ context.Context, rel string) (string, error) {
@@ -345,5 +357,24 @@ func TestImporterMergesIntoAnExistingModelWhenAsked(t *testing.T) {
 	im.Run(context.Background())
 	if !strings.Contains(lib.list(), "Bulkamancer/Lyn (2)/") {
 		t.Errorf("without merge:\n%s", lib.list())
+	}
+}
+
+func TestMergeSkipsAFileThatIsInTheModelUnderAnotherVariantFolder(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	dl := &fakeDownloads{files: []importer.File{{Rel: "Bulkamancer/Lyn/lyn_pre_supported_stl.zip/lyn.stl", Size: 1, ModUnix: 1}}}
+	lib := &fakeLibrary{files: map[string]int64{"Bulkamancer/Lyn/Supported STL/lyn.stl": 1}, content: map[string]string{"Bulkamancer/Lyn/Supported STL/lyn.stl": "x"}}
+	im := &Importer{Downloads: dl, Library: lib, Log: &memLog{recs: map[string]ImportRecord{}, baselined: true},
+		Settle: time.Hour, MergeExisting: true, DeleteImported: true, Now: func() time.Time { return now }}
+	sum, err := im.Run(context.Background())
+	if err != nil || sum.Files != 0 || sum.Removed != 1 || strings.Contains(lib.list(), "Bulkamancer/Lyn/Supported/") {
+		t.Fatalf("same file under another name: %+v %v\n%s", sum, err, lib.list())
+	}
+	// Same name and size, other content: it is a different file and gets written.
+	dl.files = []importer.File{{Rel: "Bulkamancer/Lyn/lyn_pre_supported_lys.zip/lyn.stl", Size: 1, ModUnix: 2}}
+	dl.content = "y"
+	sum, err = im.Run(context.Background())
+	if err != nil || sum.Files != 1 || lib.content["Bulkamancer/Lyn/Supported/lyn.stl"] != "y" {
+		t.Errorf("different content: %+v %v\n%s", sum, err, lib.list())
 	}
 }

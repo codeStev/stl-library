@@ -331,6 +331,32 @@ func (w LibraryWriter) Write(_ context.Context, rel string, r io.Reader, modUnix
 	return nil
 }
 
+// FindSame walks dir for files with that name and size.
+func (w LibraryWriter) FindSame(_ context.Context, dir, name string, size int64) ([]string, error) {
+	root, err := w.full(dir)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	err = filepath.WalkDir(root, func(p string, e fs.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if e.IsDir() || e.Name() != name {
+			return nil
+		}
+		if info, err := e.Info(); err == nil && info.Mode().IsRegular() && info.Size() == size {
+			rel, _ := filepath.Rel(w.Root, p)
+			out = append(out, filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	return out, err
+}
+
 func (w LibraryWriter) Hash(_ context.Context, rel string) (string, error) {
 	p, err := w.full(rel)
 	if err != nil {

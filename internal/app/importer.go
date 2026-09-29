@@ -45,6 +45,9 @@ type LibraryWriter interface {
 	Creators(ctx context.Context) ([]string, error)
 	// Hash returns a file's SHA-256 (hex).
 	Hash(ctx context.Context, rel string) (string, error)
+	// FindSame lists the files below dir with that name and size (any
+	// depth): candidates for "this file is there already".
+	FindSame(ctx context.Context, dir, name string, size int64) ([]string, error)
 }
 
 // Import states of a download folder.
@@ -95,7 +98,9 @@ type Importer struct {
 	// MergeExisting imports into a model folder that already exists in the
 	// library (files that are already there are skipped, others added)
 	// instead of making a fresh "<Model> (2)" - for archives that belong
-	// to a model whose other files are unpacked already.
+	// to a model whose other files are unpacked already. A file that is
+	// already in the model under another variant folder (e.g. "Supported
+	// STL" where the importer would write "Supported") counts as there.
 	MergeExisting bool
 	Now           func() time.Time
 }
@@ -274,7 +279,7 @@ func (im *Importer) importUnit(ctx context.Context, u importer.Unit, rec *Import
 	// the download is written next to it (a second pass, as its stream
 	// was used up comparing).
 	copied := 0
-	var differ []importer.File
+	var differ, later []importer.File
 	var written []writtenFile
 	write := func(f importer.File, to string, r io.Reader) error {
 		h := sha256.New()
@@ -292,6 +297,20 @@ func (im *Importer) importUnit(ctx context.Context, u importer.Unit, rec *Import
 			return err
 		}
 		if !exists {
+			if im.MergeExisting {
+				cands, err := im.Library.FindSame(ctx, target, path.Base(to), f.Size)
+				if err != nil {
+					return err
+				}
+				if len(cands) > 0 {
+					same, err := im.sameAsAny(ctx, cands, r)
+					if err != nil || same {
+						return err // the same file is in this model already
+					}
+					later = append(later, f) // read to the end for the comparison: written in a second pass
+					return nil
+				}
+			}
 			return write(f, to, r)
 		}
 		if size == f.Size {
@@ -303,6 +322,11 @@ func (im *Importer) importUnit(ctx context.Context, u importer.Unit, rec *Import
 		differ = append(differ, f)
 		return nil
 	})
+	if err == nil && len(later) > 0 {
+		err = im.Downloads.Each(ctx, u.Path, later, func(f importer.File, r io.Reader) error {
+			return write(f, dest[f.Rel], r)
+		})
+	}
 	if err == nil && len(differ) > 0 {
 		err = im.Downloads.Each(ctx, u.Path, differ, func(f importer.File, r io.Reader) error {
 			to := alternative(dest[f.Rel])
@@ -336,6 +360,26 @@ func (im *Importer) importUnit(ctx context.Context, u importer.Unit, rec *Import
 }
 
 type writtenFile struct{ to, sum string }
+
+// sameAsAny reports whether r (read to the end) has the content of one of
+// the library files.
+func (im *Importer) sameAsAny(ctx context.Context, rels []string, r io.Reader) (bool, error) {
+	h := sha256.New()
+	if _, err := io.Copy(h, r); err != nil {
+		return false, err
+	}
+	sum := hex.EncodeToString(h.Sum(nil))
+	for _, rel := range rels {
+		lib, err := im.Library.Hash(ctx, rel)
+		if err != nil {
+			return false, err
+		}
+		if lib == sum {
+			return true, nil
+		}
+	}
+	return false, nil
+}
 
 // sameContent reports whether r (read to the end) has the same content as
 // the library file rel.
