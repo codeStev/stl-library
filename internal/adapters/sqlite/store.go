@@ -141,6 +141,14 @@ var migrations = []string{
 	// sign-in; several may wait at once.
 	`DROP INDEX account_external;
 	CREATE UNIQUE INDEX account_external ON account (auth_provider, external_subject) WHERE external_subject != '';`,
+
+	// What a sliced file (a plate) contains: which part files, how many of
+	// each. Keyed by path like the other user data, so a rescan keeps it.
+	`CREATE TABLE slice_content (
+		slice_path TEXT NOT NULL, part_path TEXT NOT NULL, count INTEGER NOT NULL,
+		PRIMARY KEY (slice_path, part_path)
+	);
+	CREATE INDEX slice_content_part ON slice_content(part_path);`,
 }
 
 func migrate(db *sql.DB) error {

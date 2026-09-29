@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { TagPicker } from "./TagPicker";
 import { api, displayName, type Creator, type Filters, type ModelSummary, type Tag } from "./api";
 
@@ -13,6 +13,11 @@ function loadFilters(): Filters {
   }
 }
 
+// Opening a model unmounts the grid. What was loaded and where the page was
+// scrolled is kept here, so "back" lands where the user left: the same
+// models (all the pages loaded so far) at the same scroll position.
+let remembered: { key: string; models: ModelSummary[]; more: boolean; scrollY: number } | null = null;
+
 // The library grid: search, filters (creator, tag, printed), previews,
 // "load more" paging. Filters live in sessionStorage so going back to the
 // grid keeps them.
@@ -20,8 +25,12 @@ export function Library() {
   const [f, setF] = useState<Filters>(loadFilters);
   const [creators, setCreators] = useState<Creator[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
-  const [models, setModels] = useState<ModelSummary[]>([]);
-  const [more, setMore] = useState(false);
+  const back = remembered && remembered.key === JSON.stringify(loadFilters()) ? remembered : null;
+  const [models, setModels] = useState<ModelSummary[]>(back?.models ?? []);
+  const [more, setMore] = useState(back?.more ?? false);
+  const restore = useRef<number | null>(back ? back.scrollY : null);
+  const latest = useRef({ f, models, more });
+  latest.current = { f, models, more };
   const [error, setError] = useState("");
   const [selecting, setSelecting] = useState(false);
   const [picked, setPicked] = useState<Set<number>>(new Set());
@@ -37,18 +46,38 @@ export function Library() {
   useEffect(() => {
     sessionStorage.setItem("filters", JSON.stringify(f));
     const mine = ++seq.current;
+    // Coming back with the same filters: refresh as many models as were shown.
+    const keep = restore.current !== null ? Math.max(models.length, PAGE) : PAGE;
     const t = setTimeout(() => {
-      api.models(f, 0, PAGE).then(
+      api.models(f, 0, keep).then(
         (ms) => {
           if (mine !== seq.current) return; // a newer search is on its way
           setModels(ms);
-          setMore(ms.length === PAGE);
+          setMore(ms.length === keep);
         },
         (e) => setError(String(e)),
       );
-    }, 200);
+    }, restore.current !== null ? 0 : 200);
     return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [f]);
+
+  // Put the page back where it was once the remembered models are on screen.
+  useLayoutEffect(() => {
+    if (restore.current !== null && models.length > 0) {
+      window.scrollTo(0, restore.current);
+      restore.current = null;
+    }
+  }, [models]);
+
+  // Remember the state when leaving the grid.
+  useEffect(
+    () => () => {
+      const { f, models, more } = latest.current;
+      remembered = { key: JSON.stringify(f), models, more, scrollY: window.scrollY };
+    },
+    [],
+  );
 
   const toggle = (id: number) =>
     setPicked((prev) => {

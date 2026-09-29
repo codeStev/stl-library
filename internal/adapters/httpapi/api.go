@@ -85,6 +85,9 @@ func (a *API) Handler() http.Handler {
 	h("POST /api/library/scan", admin, a.requestScan)
 	h("GET /api/imports", full, a.imports)
 	h("POST /api/imports/request", admin, a.requestImport)
+	h("GET /api/parts/{id}/contents", full, a.sliceContents)
+	h("PUT /api/parts/{id}/contents", full, a.setSliceContents)
+	h("GET /api/variants/{id}/slices", full, a.variantSlices)
 	h("PUT /api/models/{id}/tags", full, a.setTags)
 	h("POST /api/models/tags", full, a.editTags)
 	h("PUT /api/models/{id}/name", full, a.setName)
@@ -365,6 +368,79 @@ func (a *API) setTags(w http.ResponseWriter, r *http.Request) {
 		tags = []string{}
 	}
 	writeJSON(w, map[string][]string{"tags": tags})
+}
+
+type partRef struct {
+	PartID    int64  `json:"partId,omitempty"`
+	Path      string `json:"path"`
+	Name      string `json:"name"`
+	ModelID   int64  `json:"modelId,omitempty"`
+	ModelName string `json:"modelName,omitempty"`
+	Count     int    `json:"count"`
+	Missing   bool   `json:"missing,omitempty"`
+}
+
+func partRefs(in []app.PartRef) []partRef {
+	out := make([]partRef, 0, len(in))
+	for _, r := range in {
+		out = append(out, partRef{r.PartID, r.Path, path.Base(r.Path), r.ModelID, r.ModelName, r.Count, r.Missing})
+	}
+	return out
+}
+
+// sliceContents returns what a sliced file contains and where a part is used.
+func (a *API) sliceContents(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	info, err := app.Slices{Store: a.Store}.Contents(r.Context(), id)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"contents": partRefs(info.Contents), "usedIn": partRefs(info.UsedIn)})
+}
+
+// setSliceContents replaces what a sliced file contains.
+func (a *API) setSliceContents(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	var body struct {
+		Items []struct {
+			PartID int64 `json:"partId"`
+			Count  int   `json:"count"`
+		} `json:"items"`
+	}
+	if !ok || !readJSON(w, r, &body) {
+		return
+	}
+	items := make([]app.SliceItem, 0, len(body.Items))
+	for _, it := range body.Items {
+		items = append(items, app.SliceItem{PartID: it.PartID, Count: it.Count})
+	}
+	if err := (app.Slices{Store: a.Store}).SetContents(r.Context(), id, items); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// variantSlices lists the sliced files each part of a variant is in.
+func (a *API) variantSlices(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	cov, err := app.Slices{Store: a.Store}.VariantCoverage(r.Context(), id)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	out := map[string][]partRef{}
+	for partID, refs := range cov {
+		out[strconv.FormatInt(partID, 10)] = partRefs(refs)
+	}
+	writeJSON(w, map[string]any{"parts": out})
 }
 
 // editTags adds and removes tags on many models at once.

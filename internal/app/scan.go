@@ -36,6 +36,11 @@ type Store interface {
 	Enqueue(ctx context.Context, variantID int64, atUnix int64, note string) error
 	Dequeue(ctx context.Context, variantID int64) error
 	Queue(ctx context.Context) ([]QueueItem, error)
+
+	// What a sliced file contains, and where a part is used.
+	SliceContents(ctx context.Context, partID int64) (SliceInfo, error)
+	SetSliceContents(ctx context.Context, partID int64, items []SliceItem) error
+	VariantSlices(ctx context.Context, variantID int64) (map[int64][]PartRef, error)
 }
 
 // ErrNotFound is returned by a Store for an unknown id.
