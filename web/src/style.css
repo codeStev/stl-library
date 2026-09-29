@@ -241,3 +241,15 @@ table.roster select { font: inherit; background: var(--panel); color: var(--text
 .slice-editor .name { flex: 1; }
 .slice-add { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0; }
 .slice-editor .muted { color: var(--muted, #888); font-size: 12px; }
+
+/* collections */
+.collection-new { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 16px; }
+.collection-new input:first-child { min-width: 260px; }
+.collection-list { list-style: none; padding: 0; margin: 0; }
+.collection-list li { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.collection-list li form { display: flex; flex-wrap: wrap; gap: 8px; }
+.collection-list .name { font-size: 16px; }
+.collection-list .note { color: var(--muted, #888); font-size: 13px; }
+.collection-list .spacer { flex: 1; }
+.collections-of .muted { color: var(--muted, #888); font-size: 13px; }
+.collections-of .tag a { color: inherit; text-decoration: none; }

@@ -138,7 +138,7 @@ function OtherModelPicker({ current, onModel }: { current: number; onModel: (m: 
       return;
     }
     const t = setTimeout(() => {
-      api.models({ q, creator: "", tag: "", printed: "", hidden: "" }, 0, 8).then((ms) => setHits(ms.filter((m) => m.id !== current)), () => setHits([]));
+      api.models({ q, creator: "", tag: "", collection: "", printed: "", hidden: "" }, 0, 8).then((ms) => setHits(ms.filter((m) => m.id !== current)), () => setHits([]));
     }, 200);
     return () => clearTimeout(t);
   }, [q, current]);

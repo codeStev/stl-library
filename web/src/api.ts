@@ -149,6 +149,13 @@ export interface ImportRecord {
   updated: number;
 }
 
+export interface Collection {
+  id: number;
+  name: string;
+  note: string;
+  models: number;
+}
+
 export interface Tag {
   tag: string;
   models: number;
@@ -215,6 +222,7 @@ export interface Filters {
   q: string;
   creator: string;
   tag: string;
+  collection: string; // a collection id, "" for all
   printed: "" | "yes" | "no";
   hidden: "" | "yes";
 }
@@ -268,6 +276,12 @@ export const api = {
   requestImport: (source: string) => send("POST", "/api/imports/request", { source }),
   enqueue: (variantId: number, note = "") => send("PUT", `/api/variants/${variantId}/queue`, { note }),
   dequeue: (variantId: number) => send("DELETE", `/api/variants/${variantId}/queue`),
+  collections: () => get<Collection[]>("/api/collections"),
+  createCollection: (name: string, note = "") => send<Collection>("POST", "/api/collections", { name, note }),
+  updateCollection: (id: number, name: string, note: string) => send("PUT", `/api/collections/${id}`, { name, note }),
+  deleteCollection: (id: number) => send("DELETE", `/api/collections/${id}`),
+  editCollection: (id: number, add: number[], remove: number[]) => send("POST", `/api/collections/${id}/models`, { add, remove }),
+  modelCollections: (modelId: number) => get<Collection[]>(`/api/models/${modelId}/collections`),
   sliceContents: (partId: number) => get<{ contents: PartLink[]; usedIn: PartLink[] }>(`/api/parts/${partId}/contents`),
   setSliceContents: (partId: number, items: { partId: number; count: number }[]) =>
     send("PUT", `/api/parts/${partId}/contents`, { items }),

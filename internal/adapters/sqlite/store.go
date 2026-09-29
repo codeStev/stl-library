@@ -149,6 +149,19 @@ var migrations = []string{
 		PRIMARY KEY (slice_path, part_path)
 	);
 	CREATE INDEX slice_content_part ON slice_content(part_path);`,
+
+	// Collections of models (a scenario, a project), by model folder like
+	// the rest of the user data.
+	`CREATE TABLE collection (
+		id INTEGER PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE UNIQUE, note TEXT NOT NULL DEFAULT '',
+		created_unix INTEGER NOT NULL
+	);
+	CREATE TABLE collection_model (
+		collection_id INTEGER NOT NULL REFERENCES collection(id) ON DELETE CASCADE,
+		dir TEXT NOT NULL, added_unix INTEGER NOT NULL,
+		PRIMARY KEY (collection_id, dir)
+	);
+	CREATE INDEX collection_model_dir ON collection_model(dir);`,
 }
 
 func migrate(db *sql.DB) error {
@@ -382,6 +395,10 @@ func (s *Store) Search(ctx context.Context, q app.Query) ([]app.ModelSummary, er
 	if q.Tag != "" {
 		where = append(where, `EXISTS (SELECT 1 FROM tag t WHERE t.dir = m.dir AND t.tag = ? COLLATE NOCASE)`)
 		args = append(args, q.Tag)
+	}
+	if q.Collection != 0 {
+		where = append(where, `EXISTS (SELECT 1 FROM collection_model cm WHERE cm.dir = m.dir AND cm.collection_id = ?)`)
+		args = append(args, q.Collection)
 	}
 	if !q.Hidden {
 		where = append(where, `NOT EXISTS (SELECT 1 FROM model_user u WHERE u.dir = m.dir AND u.hidden)`)

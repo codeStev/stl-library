@@ -88,6 +88,12 @@ func (a *API) Handler() http.Handler {
 	h("GET /api/parts/{id}/contents", full, a.sliceContents)
 	h("PUT /api/parts/{id}/contents", full, a.setSliceContents)
 	h("GET /api/variants/{id}/slices", full, a.variantSlices)
+	h("GET /api/collections", full, a.collections)
+	h("POST /api/collections", full, a.createCollection)
+	h("PUT /api/collections/{id}", full, a.updateCollection)
+	h("DELETE /api/collections/{id}", full, a.deleteCollection)
+	h("POST /api/collections/{id}/models", full, a.editCollection)
+	h("GET /api/models/{id}/collections", full, a.modelCollections)
 	h("PUT /api/models/{id}/tags", full, a.setTags)
 	h("POST /api/models/tags", full, a.editTags)
 	h("PUT /api/models/{id}/name", full, a.setName)
@@ -198,7 +204,7 @@ func (a *API) searchModels(w http.ResponseWriter, r *http.Request) {
 	if offset < 0 {
 		offset = 0
 	}
-	query := app.Query{Text: q.Get("q"), Creator: q.Get("creator"), Tag: q.Get("tag"), Hidden: q.Get("hidden") == "yes",
+	query := app.Query{Text: q.Get("q"), Creator: q.Get("creator"), Tag: q.Get("tag"), Collection: queryID(q.Get("collection")), Hidden: q.Get("hidden") == "yes",
 		Limit: limit, Offset: offset}
 	switch q.Get("printed") {
 	case "yes":
@@ -996,6 +1002,106 @@ func attachment(name string) string {
 	return `attachment; filename="` + ascii + `"; filename*=UTF-8''` + url.PathEscape(name)
 }
 
+func queryID(s string) int64 {
+	n, _ := strconv.ParseInt(s, 10, 64)
+	if n < 0 {
+		return 0
+	}
+	return n
+}
+
+type collectionJSON struct {
+	ID     int64  `json:"id"`
+	Name   string `json:"name"`
+	Note   string `json:"note"`
+	Models int    `json:"models"`
+}
+
+func collectionsJSON(cs []app.Collection) []collectionJSON {
+	out := make([]collectionJSON, 0, len(cs))
+	for _, c := range cs {
+		out = append(out, collectionJSON{c.ID, c.Name, c.Note, c.Models})
+	}
+	return out
+}
+
+func (a *API) collections(w http.ResponseWriter, r *http.Request) {
+	cs, err := app.Collections{Store: a.Store}.List(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, collectionsJSON(cs))
+}
+
+func (a *API) createCollection(w http.ResponseWriter, r *http.Request) {
+	var body struct{ Name, Note string }
+	if !readJSON(w, r, &body) {
+		return
+	}
+	c, err := app.Collections{Store: a.Store}.Create(r.Context(), body.Name, body.Note)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, collectionsJSON([]app.Collection{c})[0])
+}
+
+func (a *API) updateCollection(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	var body struct{ Name, Note string }
+	if !ok || !readJSON(w, r, &body) {
+		return
+	}
+	if err := (app.Collections{Store: a.Store}).Update(r.Context(), id, body.Name, body.Note); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) deleteCollection(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	if err := (app.Collections{Store: a.Store}).Delete(r.Context(), id); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// editCollection adds and removes models of a collection.
+func (a *API) editCollection(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	var body struct {
+		Add    []int64 `json:"add"`
+		Remove []int64 `json:"remove"`
+	}
+	if !ok || !readJSON(w, r, &body) {
+		return
+	}
+	if err := (app.Collections{Store: a.Store}).Edit(r.Context(), id, body.Add, body.Remove); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) modelCollections(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	cs, err := app.Collections{Store: a.Store}.OfModel(r.Context(), id)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, collectionsJSON(cs))
+}
+
 func pathID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || id <= 0 {
@@ -1014,7 +1120,7 @@ func fail(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if errors.Is(err, app.ErrBusy) || errors.Is(err, app.ErrNoPrinter) {
+	if errors.Is(err, app.ErrBusy) || errors.Is(err, app.ErrNoPrinter) || errors.Is(err, app.ErrExists) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}

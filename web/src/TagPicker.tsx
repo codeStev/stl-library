@@ -8,11 +8,13 @@ export function TagPicker({
   existing,
   skip = [],
   placeholder = "add tag…",
+  noun = "tag",
   onPick,
 }: {
   existing: Tag[];
   skip?: string[]; // tags not offered (already on the model)
   placeholder?: string;
+  noun?: string; // what is picked, for the "Create new …" entry
   onPick: (tag: string) => void;
 }) {
   const [text, setText] = useState("");
@@ -91,7 +93,7 @@ export function TagPicker({
             >
               {r.create ? (
                 <>
-                  Create new tag “<b>{r.tag}</b>”
+                  Create new {noun} “<b>{r.tag}</b>”
                 </>
               ) : (
                 <>

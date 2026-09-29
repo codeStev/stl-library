@@ -37,6 +37,14 @@ type Store interface {
 	Dequeue(ctx context.Context, variantID int64) error
 	Queue(ctx context.Context) ([]QueueItem, error)
 
+	// Collections of models.
+	Collections(ctx context.Context) ([]Collection, error)
+	CreateCollection(ctx context.Context, name, note string, atUnix int64) (Collection, error)
+	UpdateCollection(ctx context.Context, id int64, name, note string) error
+	DeleteCollection(ctx context.Context, id int64) error
+	EditCollection(ctx context.Context, id int64, add, remove []int64, atUnix int64) error
+	ModelCollections(ctx context.Context, modelID int64) ([]Collection, error)
+
 	// What a sliced file contains, and where a part is used.
 	SliceContents(ctx context.Context, partID int64) (SliceInfo, error)
 	SetSliceContents(ctx context.Context, partID int64, items []SliceItem) error
@@ -58,10 +66,12 @@ type Query struct {
 	Text    string
 	Creator string
 	Tag     string
-	Printed *bool // only printed (true) or never printed (false) models
-	Hidden  bool  // include hidden models
-	Limit   int
-	Offset  int
+	// Collection: only models in this collection (an id; 0 = all).
+	Collection int64
+	Printed    *bool // only printed (true) or never printed (false) models
+	Hidden     bool  // include hidden models
+	Limit      int
+	Offset     int
 }
 
 // ModelSummary is one search hit.

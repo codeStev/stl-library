@@ -1,9 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { TagPicker } from "./TagPicker";
-import { api, displayName, type Creator, type Filters, type ModelSummary, type Tag } from "./api";
+import { api, displayName, type Collection, type Creator, type Filters, type ModelSummary, type Tag } from "./api";
 
 const PAGE = 60;
-const empty: Filters = { q: "", creator: "", tag: "", printed: "", hidden: "" };
+const empty: Filters = { q: "", creator: "", tag: "", collection: "", printed: "", hidden: "" };
 
 function loadFilters(): Filters {
   try {
@@ -25,6 +25,7 @@ export function Library() {
   const [f, setF] = useState<Filters>(loadFilters);
   const [creators, setCreators] = useState<Creator[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
+  const [collections, setCollections] = useState<Collection[]>([]);
   const back = remembered && remembered.key === JSON.stringify(loadFilters()) ? remembered : null;
   const [models, setModels] = useState<ModelSummary[]>(back?.models ?? []);
   const [more, setMore] = useState(back?.more ?? false);
@@ -41,6 +42,7 @@ export function Library() {
   useEffect(() => {
     api.creators().then(setCreators, (e) => setError(String(e)));
     api.tags().then(setTags, () => {});
+    api.collections().then(setCollections, () => {});
   }, []);
 
   useEffect(() => {
@@ -103,6 +105,30 @@ export function Library() {
       (e) => setError(String(e)),
     );
 
+  // Put the selected models into a collection (made first when it is new), or take them out of the one being viewed.
+  const toCollection = async (name: string) => {
+    try {
+      let c = collections.find((x) => x.name.toLowerCase() === name.toLowerCase());
+      if (!c) c = await api.createCollection(name);
+      await api.editCollection(c.id, [...picked], []);
+      setNote(`Added ${picked.size} model${picked.size === 1 ? "" : "s"} to “${c.name}”`);
+      setError("");
+      api.collections().then(setCollections, () => {});
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+  const fromCollection = () =>
+    api.editCollection(Number(f.collection), [], [...picked]).then(
+      () => {
+        setNote(`Removed ${picked.size} model${picked.size === 1 ? "" : "s"} from this collection`);
+        setPicked(new Set());
+        api.collections().then(setCollections, () => {});
+        return api.models(f, 0, Math.max(models.length, PAGE)).then(setModels);
+      },
+      (e) => setError(String(e)),
+    );
+
   const loadMore = () =>
     api.models(f, models.length, PAGE).then((ms) => {
       setModels((prev) => [...prev, ...ms]);
@@ -137,6 +163,16 @@ export function Library() {
             ))}
           </select>
         )}
+        {collections.length > 0 && (
+          <select value={f.collection} onChange={(e) => set({ collection: e.target.value })}>
+            <option value="">All collections</option>
+            {collections.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name} ({c.models})
+              </option>
+            ))}
+          </select>
+        )}
         <select value={f.printed} onChange={(e) => set({ printed: e.target.value as Filters["printed"] })}>
           <option value="">Printed or not</option>
           <option value="yes">Printed</option>
@@ -164,6 +200,18 @@ export function Library() {
             <>
               <span>Add tag</span>
               <TagPicker existing={tags} onPick={(t) => edit([t], [])} placeholder="pick or create a tag…" />
+              <span>Collection</span>
+              <TagPicker
+                existing={collections.map((c) => ({ tag: c.name, models: c.models }))}
+                onPick={toCollection}
+                placeholder="add to a collection…"
+                noun="collection"
+              />
+              {f.collection !== "" && (
+                <button className="link" onClick={fromCollection}>
+                  remove from this collection
+                </button>
+              )}
               {pickedTags.length > 0 && (
                 <>
                   <span>Remove tag</span>

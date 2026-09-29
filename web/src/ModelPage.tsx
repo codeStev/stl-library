@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { api, DIM_VALUES, displayName, formatBytes, formatDate, isSliced, printable, type DimKey, type FileRef, type ModelDetail, type PartLink, type Tag, type Variant } from "./api";
+import { api, DIM_VALUES, displayName, formatBytes, formatDate, isSliced, printable, type DimKey, type FileRef, type Collection, type ModelDetail, type PartLink, type Tag, type Variant } from "./api";
 import { SliceEditor } from "./SliceEditor";
 import { TagPicker } from "./TagPicker";
 
@@ -98,7 +98,7 @@ export function ModelPage({ id }: { id: number }) {
         <a
           href="#/"
           onClick={() =>
-            sessionStorage.setItem("filters", JSON.stringify({ q: "", creator: m.creator, tag: "", printed: "", hidden: "" }))
+            sessionStorage.setItem("filters", JSON.stringify({ q: "", creator: m.creator, tag: "", collection: "", printed: "", hidden: "" }))
           }
         >
           {m.creator}
@@ -112,6 +112,7 @@ export function ModelPage({ id }: { id: number }) {
       {actionError && <p className="error">{actionError}</p>}
       <NameEditor m={m} act={act} />
       <TagEditor m={m} act={act} />
+      <CollectionEditor m={m} act={act} />
       <div className="model-body">
         <section className="gallery">
           {pictures.length > 0 ? (
@@ -306,6 +307,49 @@ function TagEditor({ m, act }: { m: ModelDetail; act: Act }) {
         </span>
       ))}
       <TagPicker existing={existing} skip={m.tags} onPick={(t) => save([...m.tags, t])} />
+    </div>
+  );
+}
+
+// The collections a model is in; it can be in several.
+function CollectionEditor({ m, act }: { m: ModelDetail; act: Act }) {
+  const [mine, setMine] = useState<Collection[]>([]);
+  const [all, setAll] = useState<Collection[]>([]);
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    api.modelCollections(m.id).then(setMine, () => {});
+    api.collections().then(setAll, () => {});
+  }, [m.id, tick]);
+  const change = (p: Promise<unknown>) => act(p).then(() => setTick((n) => n + 1));
+  const add = async (name: string) => {
+    let c = all.find((x) => x.name.toLowerCase() === name.toLowerCase());
+    if (!c) c = await api.createCollection(name);
+    const id = c.id;
+    return change(api.editCollection(id, [m.id], []));
+  };
+  return (
+    <div className="tags editable collections-of">
+      <span className="muted">Collections:</span>
+      {mine.map((c) => (
+        <span key={c.id} className="tag">
+          <a
+            href="#/"
+            onClick={() => sessionStorage.setItem("filters", JSON.stringify({ q: "", creator: "", tag: "", collection: String(c.id), printed: "", hidden: "" }))}
+          >
+            {c.name}
+          </a>
+          <button className="link" onClick={() => change(api.editCollection(c.id, [], [m.id]))} aria-label={`Take out of ${c.name}`}>
+            ✕
+          </button>
+        </span>
+      ))}
+      <TagPicker
+        existing={all.map((c) => ({ tag: c.name, models: c.models }))}
+        skip={mine.map((c) => c.name)}
+        onPick={add}
+        placeholder="add to a collection…"
+        noun="collection"
+      />
     </div>
   );
 }

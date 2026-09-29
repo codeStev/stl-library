@@ -697,3 +697,100 @@ func TestSliceContentsBothDirections(t *testing.T) {
 		t.Errorf("cleared: %+v", c)
 	}
 }
+
+func TestCollectionsHoldModelsAndAModelCanBeInSeveral(t *testing.T) {
+	srv := server(t)
+	var all []modelSummary
+	getJSON(t, srv, "/api/models", &all)
+	a, b := all[0].ID, all[1].ID
+	type coll struct {
+		ID     int64  `json:"id"`
+		Name   string `json:"name"`
+		Note   string `json:"note"`
+		Models int    `json:"models"`
+	}
+	create := func(name string) (int, coll) {
+		code, body := send(t, srv, "POST", "/api/collections", `{"name":"`+name+`","note":"for the game"}`)
+		var c coll
+		json.Unmarshal([]byte(body), &c)
+		return code, c
+	}
+	code, dungeon := create("  Dungeon   Night ")
+	if code != 200 || dungeon.Name != "Dungeon Night" || dungeon.ID == 0 {
+		t.Fatalf("create: %d %+v", code, dungeon)
+	}
+	if code, _ := create("dungeon night"); code != 409 {
+		t.Errorf("the same name in another case: %d", code)
+	}
+	if code, _ := send(t, srv, "POST", "/api/collections", `{"name":"  "}`); code != 400 {
+		t.Errorf("empty name: %d", code)
+	}
+	_, boss := create("Boss fights")
+
+	// The same model goes into both collections; the other only into one.
+	for _, c := range []coll{dungeon, boss} {
+		if code, _ := send(t, srv, "POST", "/api/collections/"+itoa(c.ID)+"/models", `{"add":[`+itoa(a)+`]}`); code != 204 {
+			t.Fatalf("add to %s: %d", c.Name, code)
+		}
+	}
+	send(t, srv, "POST", "/api/collections/"+itoa(dungeon.ID)+"/models", `{"add":[`+itoa(b)+`,`+itoa(a)+`]}`) // adding twice is fine
+	var mine []coll
+	getJSON(t, srv, "/api/models/"+itoa(a)+"/collections", &mine)
+	if len(mine) != 2 || mine[0].Name != "Boss fights" || mine[1].Name != "Dungeon Night" {
+		t.Errorf("collections of a: %+v", mine)
+	}
+	getJSON(t, srv, "/api/models/"+itoa(b)+"/collections", &mine)
+	if len(mine) != 1 || mine[0].Name != "Dungeon Night" {
+		t.Errorf("collections of b: %+v", mine)
+	}
+	var list []coll
+	getJSON(t, srv, "/api/collections", &list)
+	if len(list) != 2 || list[0].Models != 1 || list[1].Models != 2 {
+		t.Errorf("list: %+v", list)
+	}
+	// The library can be filtered by a collection.
+	var in []modelSummary
+	getJSON(t, srv, "/api/models?collection="+itoa(dungeon.ID), &in)
+	if len(in) != 2 {
+		t.Errorf("filter: %d models", len(in))
+	}
+	getJSON(t, srv, "/api/models?collection="+itoa(boss.ID), &in)
+	if len(in) != 1 || in[0].ID != a {
+		t.Errorf("filter boss: %+v", in)
+	}
+	// Remove a model from one collection only.
+	send(t, srv, "POST", "/api/collections/"+itoa(dungeon.ID)+"/models", `{"remove":[`+itoa(a)+`]}`)
+	getJSON(t, srv, "/api/models/"+itoa(a)+"/collections", &mine)
+	if len(mine) != 1 || mine[0].Name != "Boss fights" {
+		t.Errorf("after remove: %+v", mine)
+	}
+	// Rename, note, and an unknown model changes nothing.
+	if code, _ := send(t, srv, "PUT", "/api/collections/"+itoa(boss.ID), `{"name":"Big bads","note":"act 3"}`); code != 204 {
+		t.Errorf("rename: %d", code)
+	}
+	if code, _ := send(t, srv, "PUT", "/api/collections/"+itoa(boss.ID), `{"name":"dungeon night"}`); code != 409 {
+		t.Errorf("rename onto a taken name: %d", code)
+	}
+	if code, _ := send(t, srv, "POST", "/api/collections/"+itoa(boss.ID)+"/models", `{"add":[`+itoa(b)+`,99999]}`); code != 404 {
+		t.Errorf("unknown model: %d", code)
+	}
+	getJSON(t, srv, "/api/models/"+itoa(b)+"/collections", &mine)
+	if len(mine) != 1 {
+		t.Errorf("a failed edit must not apply partly: %+v", mine)
+	}
+	if code, _ := send(t, srv, "POST", "/api/collections/99999/models", `{"add":[1]}`); code != 404 {
+		t.Errorf("unknown collection: %d", code)
+	}
+	if code, _ := send(t, srv, "POST", "/api/collections/"+itoa(boss.ID)+"/models", `{}`); code != 400 {
+		t.Errorf("empty edit: %d", code)
+	}
+	// Deleting a collection keeps the models.
+	if code, _ := send(t, srv, "DELETE", "/api/collections/"+itoa(dungeon.ID), ""); code != 204 {
+		t.Errorf("delete: %d", code)
+	}
+	getJSON(t, srv, "/api/models", &all)
+	getJSON(t, srv, "/api/collections", &list)
+	if len(all) < 2 || len(list) != 1 || list[0].Name != "Big bads" || list[0].Note != "act 3" {
+		t.Errorf("after delete: %d models, %+v", len(all), list)
+	}
+}
