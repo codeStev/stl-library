@@ -312,3 +312,15 @@ func TestImporterPutsABustIntoItsExistingModel(t *testing.T) {
 		t.Errorf("library:\n%s", lib.list())
 	}
 }
+
+func TestImporterAdoptsExistingFoldersWhenAsked(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	dl := &fakeDownloads{files: []importer.File{{Rel: "nomnom/Kida/STL/75mm/k.stl", Size: 1, ModUnix: 1}}}
+	lib := &fakeLibrary{files: map[string]int64{}}
+	log := &memLog{recs: map[string]ImportRecord{}}
+	im := &Importer{Downloads: dl, Library: lib, Log: log, Settle: time.Hour, AdoptExisting: true, Now: func() time.Time { return now }}
+	sum, err := im.Run(context.Background())
+	if err != nil || sum.Imported != 1 || sum.Baselined != 0 || !strings.Contains(lib.list(), "Nomnom/Kida/75mm/k.stl") {
+		t.Errorf("%+v %v\n%s", sum, err, lib.list())
+	}
+}

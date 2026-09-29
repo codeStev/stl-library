@@ -132,6 +132,14 @@ With `IMPORT_SOURCE` set, `stlib serve` looks at that folder every
 `stlib import --db index.db --source <downloads> --dry-run <library>` shows
 where every file would go without writing anything.
 
+The downloads folder and the library must be separate folders (neither
+inside the other): importing with `--delete` must never be able to delete
+the library's own files. To unpack archives that already sit in the
+library, move their folder out (a rename on the same disk), import it with
+`--adopt --delete` and the library then has them unpacked in the
+convention: `--adopt` imports what is in the downloads on the first run
+instead of only recording it.
+
 ### Printing
 
 Configure the printer on the Settings page (address, and the ports if they

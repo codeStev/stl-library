@@ -40,7 +40,7 @@ const usage = `usage:
   stlib check <library-root>
   stlib scan --db <index.db> <library-root>
   stlib search --db <index.db> [--creator <name>] [--limit N] [words...]
-  stlib import --db <index.db> --source <downloads> [--settle 1h] [--delete] [--dry-run] <library-root>
+  stlib import --db <index.db> --source <downloads> [--settle 1h] [--delete] [--adopt] [--dry-run] <library-root>
   stlib printer [--host <addr>[:<port>]] <status|files|send|print|rm|pause|resume|stop|watch> …
   stlib serve [--root <library-root>] [--data <dir>] [--listen <addr>] [--scan-interval <duration>]
       (defaults from LIBRARY_ROOT, DATA_DIR, LISTEN_ADDR, SCAN_INTERVAL)`
@@ -68,6 +68,7 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	source := fs.String("source", os.Getenv("IMPORT_SOURCE"), "downloads folder to import from")
 	settle := fs.String("settle", envOr("IMPORT_SETTLE", "1h"), "how long a download folder must be unchanged")
 	importEvery := fs.String("import-interval", envOr("IMPORT_INTERVAL", "1h"), "time between imports")
+	importAdopt := fs.Bool("adopt", false, "import the folders already in the downloads on the first run too (instead of only recording them)")
 	importDelete := fs.Bool("delete", os.Getenv("IMPORT_DELETE") == "true", "remove imported folders from the downloads once verified in the library")
 	dryRun := fs.Bool("dry-run", false, "only show where files would go")
 	host := fs.String("host", "", "printer address (printer command)")
@@ -132,6 +133,9 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		if err != nil {
 			return fmt.Errorf("--settle: %v", err)
 		}
+		if err := separateFolders(*source, rest[0]); err != nil {
+			return err
+		}
 		lowPriority()
 		s, err := sqlite.Open(*db)
 		if err != nil {
@@ -139,7 +143,7 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		}
 		defer s.Close()
 		im := &app.Importer{Downloads: disk.Downloads{Root: *source}, Library: disk.LibraryWriter{Root: rest[0]}, Log: s, Settle: settleFor,
-			DeleteImported: *importDelete}
+			DeleteImported: *importDelete, AdoptExisting: *importAdopt}
 		if *dryRun {
 			return printPreview(ctx, out, im)
 		}
@@ -167,6 +171,9 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 			importFor, err := time.ParseDuration(*importEvery)
 			if err != nil || importFor < time.Minute {
 				return fmt.Errorf("IMPORT_INTERVAL %q: must be a duration of at least 1m", *importEvery)
+			}
+			if err := separateFolders(*source, *root); err != nil {
+				return fmt.Errorf("IMPORT_SOURCE: %v", err)
 			}
 			imp = &importConfig{source: *source, settle: settleFor, every: importFor, delete: *importDelete}
 		}

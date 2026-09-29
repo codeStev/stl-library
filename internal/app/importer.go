@@ -88,7 +88,11 @@ type Importer struct {
 	Log            ImportLog
 	Settle         time.Duration // how long a folder must be unchanged
 	DeleteImported bool
-	Now            func() time.Time
+	// AdoptExisting imports what is in the downloads on the very first run
+	// too, instead of only recording it as already there (for a downloads
+	// folder that was staged on purpose, e.g. to unpack archives).
+	AdoptExisting bool
+	Now           func() time.Time
 }
 
 // ImportSummary counts the outcome of a run.
@@ -127,6 +131,12 @@ func (im *Importer) Run(ctx context.Context) (ImportSummary, error) {
 	baselined, err := im.Log.ImportBaselined(ctx)
 	if err != nil {
 		return sum, err
+	}
+	if !baselined && im.AdoptExisting {
+		if err := im.Log.SetImportBaselined(ctx); err != nil {
+			return sum, err
+		}
+		baselined = true
 	}
 	if !baselined {
 		for _, u := range units {
