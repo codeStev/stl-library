@@ -92,6 +92,11 @@ type Importer struct {
 	// too, instead of only recording it as already there (for a downloads
 	// folder that was staged on purpose, e.g. to unpack archives).
 	AdoptExisting bool
+	// MergeExisting imports into a model folder that already exists in the
+	// library (files that are already there are skipped, others added)
+	// instead of making a fresh "<Model> (2)" - for archives that belong
+	// to a model whose other files are unpacked already.
+	MergeExisting bool
 	Now           func() time.Time
 }
 
@@ -382,7 +387,7 @@ func (im *Importer) targetDir(ctx context.Context, modelDir, previous string, bu
 	if previous != "" {
 		return previous, nil
 	}
-	if bust {
+	if bust || im.MergeExisting {
 		return modelDir, nil
 	}
 	for i := 1; ; i++ {

@@ -145,7 +145,10 @@ the library's own files. To unpack archives that already sit in the
 library, move their folder out (a rename on the same disk), import it with
 `--adopt --delete` and the library then has them unpacked in the
 convention: `--adopt` imports what is in the downloads on the first run
-instead of only recording it.
+instead of only recording it. `--merge` imports into a model folder that
+already exists (files that are already there are skipped) instead of
+making `<Model> (2)`: for archives that belong to a model whose other
+files are unpacked already.
 
 ### Printing
 

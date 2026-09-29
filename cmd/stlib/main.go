@@ -40,7 +40,7 @@ const usage = `usage:
   stlib check <library-root>
   stlib scan --db <index.db> <library-root>
   stlib search --db <index.db> [--creator <name>] [--limit N] [words...]
-  stlib import --db <index.db> --source <downloads> [--settle 1h] [--delete] [--adopt] [--dry-run] <library-root>
+  stlib import --db <index.db> --source <downloads> [--settle 1h] [--delete] [--adopt] [--merge] [--dry-run] <library-root>
   stlib printer [--host <addr>[:<port>]] <status|files|send|print|rm|pause|resume|stop|watch> …
   stlib serve [--root <library-root>] [--data <dir>] [--listen <addr>] [--scan-interval <duration>]
       (defaults from LIBRARY_ROOT, DATA_DIR, LISTEN_ADDR, SCAN_INTERVAL)`
@@ -68,6 +68,7 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	source := fs.String("source", os.Getenv("IMPORT_SOURCE"), "downloads folder to import from")
 	settle := fs.String("settle", envOr("IMPORT_SETTLE", "1h"), "how long a download folder must be unchanged")
 	importEvery := fs.String("import-interval", envOr("IMPORT_INTERVAL", "1h"), "time between imports")
+	importMerge := fs.Bool("merge", false, "import into a model folder that already exists (skip files that are there) instead of making '<Model> (2)'")
 	importAdopt := fs.Bool("adopt", false, "import the folders already in the downloads on the first run too (instead of only recording them)")
 	importDelete := fs.Bool("delete", os.Getenv("IMPORT_DELETE") == "true", "remove imported folders from the downloads once verified in the library")
 	dryRun := fs.Bool("dry-run", false, "only show where files would go")
@@ -143,7 +144,7 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		}
 		defer s.Close()
 		im := &app.Importer{Downloads: newDownloads(*source), Library: disk.LibraryWriter{Root: rest[0]}, Log: s, Settle: settleFor,
-			DeleteImported: *importDelete, AdoptExisting: *importAdopt}
+			DeleteImported: *importDelete, AdoptExisting: *importAdopt, MergeExisting: *importMerge}
 		if *dryRun {
 			return printPreview(ctx, out, im)
 		}

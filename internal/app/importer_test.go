@@ -324,3 +324,26 @@ func TestImporterAdoptsExistingFoldersWhenAsked(t *testing.T) {
 		t.Errorf("%+v %v\n%s", sum, err, lib.list())
 	}
 }
+
+func TestImporterMergesIntoAnExistingModelWhenAsked(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	mk := func(merge bool) (*Importer, *fakeLibrary) {
+		dl := &fakeDownloads{files: []importer.File{{Rel: "Bulkamancer/Lyn/lyn_no_supports.zip/lyn.stl", Size: 1, ModUnix: 1},
+			{Rel: "Bulkamancer/Lyn/lyn_no_supports.zip/base.stl", Size: 1, ModUnix: 1}}}
+		lib := &fakeLibrary{files: map[string]int64{"Bulkamancer/Lyn/Supported STL/lyn.stl": 1}}
+		return &Importer{Downloads: dl, Library: lib, Log: &memLog{recs: map[string]ImportRecord{}, baselined: true},
+			Settle: time.Hour, MergeExisting: merge, Now: func() time.Time { return now }}, lib
+	}
+	im, lib := mk(true)
+	if _, err := im.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(lib.list(), "(2)") || !strings.Contains(lib.list(), "Bulkamancer/Lyn/No Supports/base.stl") {
+		t.Errorf("merge:\n%s", lib.list())
+	}
+	im, lib = mk(false)
+	im.Run(context.Background())
+	if !strings.Contains(lib.list(), "Bulkamancer/Lyn (2)/") {
+		t.Errorf("without merge:\n%s", lib.list())
+	}
+}
