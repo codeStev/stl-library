@@ -459,3 +459,38 @@ func TestNotificationSettingsAndPartVariant(t *testing.T) {
 		t.Errorf("part variant: %d %v", v, err)
 	}
 }
+
+func TestEditTagsAddsAndRemovesOnManyModelsKeepingTheirOthers(t *testing.T) {
+	s, ctx := open(t), context.Background()
+	if _, err := sync(s, libraryV1...); err != nil {
+		t.Fatal(err)
+	}
+	all, err := s.Search(ctx, app.Query{Limit: 10})
+	if err != nil || len(all) < 2 {
+		t.Fatalf("%v %v", all, err)
+	}
+	ids := []int64{all[0].ID, all[1].ID}
+	if err := s.SetTags(ctx, ids[0], []string{"dragon", "wip"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EditTags(ctx, ids, []string{"dnd"}, []string{"wip"}); err != nil {
+		t.Fatal(err)
+	}
+	hits, _ := s.Search(ctx, app.Query{Tag: "dnd", Limit: 10})
+	if len(hits) != 2 {
+		t.Errorf("dnd on %d models", len(hits))
+	}
+	if hits, _ = s.Search(ctx, app.Query{Tag: "wip", Limit: 10}); len(hits) != 0 {
+		t.Errorf("wip should be gone: %+v", hits)
+	}
+	if hits, _ = s.Search(ctx, app.Query{Tag: "dragon", Limit: 10}); len(hits) != 1 || hits[0].ID != ids[0] {
+		t.Errorf("an untouched tag must stay: %+v", hits)
+	}
+	// An unknown id fails and changes nothing.
+	if err := s.EditTags(ctx, []int64{ids[0], 9999}, []string{"oops"}, nil); err != app.ErrNotFound {
+		t.Errorf("unknown id: %v", err)
+	}
+	if hits, _ = s.Search(ctx, app.Query{Tag: "oops", Limit: 10}); len(hits) != 0 {
+		t.Errorf("a failed edit must not apply partly: %+v", hits)
+	}
+}

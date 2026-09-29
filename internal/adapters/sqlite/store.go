@@ -636,6 +636,36 @@ func (s *Store) SetTags(ctx context.Context, modelID int64, tags []string) error
 	return tx.Commit()
 }
 
+// EditTags adds and removes tags on many models in one transaction. An
+// unknown model id is an error and changes nothing.
+func (s *Store) EditTags(ctx context.Context, modelIDs []int64, add, remove []string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, id := range modelIDs {
+		dir, err := s.modelDir(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		for _, t := range remove {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM tag WHERE dir = ? AND tag = ?`, dir, t); err != nil {
+				return err
+			}
+		}
+		for _, t := range add {
+			if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO tag (dir, tag) VALUES (?, ?)`, dir, t); err != nil {
+				return err
+			}
+		}
+		if err := writeFTS(ctx, tx, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // SetDisplayName sets (or with "" clears) a model's display name.
 func (s *Store) SetDisplayName(ctx context.Context, modelID int64, name string) error {
 	tx, err := s.db.BeginTx(ctx, nil)

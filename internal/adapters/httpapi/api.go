@@ -86,6 +86,7 @@ func (a *API) Handler() http.Handler {
 	h("GET /api/imports", full, a.imports)
 	h("POST /api/imports/request", admin, a.requestImport)
 	h("PUT /api/models/{id}/tags", full, a.setTags)
+	h("POST /api/models/tags", full, a.editTags)
 	h("PUT /api/models/{id}/name", full, a.setName)
 	h("PUT /api/models/{id}/hidden", full, a.setHidden)
 	h("PUT /api/variants/{id}/label", full, a.setLabel)
@@ -364,6 +365,31 @@ func (a *API) setTags(w http.ResponseWriter, r *http.Request) {
 		tags = []string{}
 	}
 	writeJSON(w, map[string][]string{"tags": tags})
+}
+
+// editTags adds and removes tags on many models at once.
+func (a *API) editTags(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		IDs    []int64  `json:"ids"`
+		Add    []string `json:"add"`
+		Remove []string `json:"remove"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	added, removed, err := a.User.EditTags(r.Context(), body.IDs, body.Add, body.Remove)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"models": len(body.IDs), "added": nonNil(added), "removed": nonNil(removed)})
+}
+
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 func (a *API) setName(w http.ResponseWriter, r *http.Request) {

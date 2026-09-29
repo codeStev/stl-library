@@ -24,6 +24,9 @@ type Store interface {
 
 	// User data, keyed by folder so it survives rescans.
 	SetTags(ctx context.Context, modelID int64, tags []string) error
+	// EditTags adds and removes tags on many models at once, leaving their
+	// other tags alone.
+	EditTags(ctx context.Context, modelIDs []int64, add, remove []string) error
 	SetDisplayName(ctx context.Context, modelID int64, name string) error
 	Tags(ctx context.Context) ([]TagCount, error)
 	AddPrint(ctx context.Context, variantID int64, atUnix int64, note string) (Print, error)

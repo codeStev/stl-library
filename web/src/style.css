@@ -215,3 +215,17 @@ table.roster select { font: inherit; background: var(--panel); color: var(--text
 .settings > button, .add-account button:not(.primary) {
   font: inherit; padding: 8px 16px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; margin-bottom: 16px;
 }
+
+/* tag picker and bulk selection */
+.tag-picker { position: relative; display: inline-block; }
+.tag-picker input { font-size: 13px; padding: 3px 8px; width: 170px; }
+.tag-options { position: absolute; z-index: 20; left: 0; top: calc(100% + 2px); min-width: 220px; max-height: 280px; overflow-y: auto; margin: 0; padding: 4px; list-style: none; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 20px rgba(0, 0, 0, .25); }
+.tag-options li { padding: 5px 8px; border-radius: 5px; cursor: pointer; font-size: 13px; }
+.tag-options li.active { background: var(--line); }
+.tag-options li.create { color: var(--accent); }
+.tag-options .muted { color: var(--muted, #888); font-size: 11px; margin-left: 6px; }
+.bulkbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 12px; margin-bottom: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); position: sticky; top: 0; z-index: 10; }
+.bulkbar .note { color: var(--accent); font-size: 13px; }
+.card.picked { outline: 2px solid var(--accent); }
+.tick { position: absolute; top: 6px; left: 6px; width: 22px; height: 22px; border-radius: 6px; border: 2px solid #fff; background: rgba(0, 0, 0, .45); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 14px; z-index: 2; }
+.tick.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }

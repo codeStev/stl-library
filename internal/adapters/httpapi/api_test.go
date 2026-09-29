@@ -561,3 +561,52 @@ func TestRescanNow(t *testing.T) {
 		t.Errorf("state %+v", st)
 	}
 }
+
+func TestBulkTagEdit(t *testing.T) {
+	srv := server(t)
+	var all []modelSummary
+	getJSON(t, srv, "/api/models", &all)
+	if len(all) < 2 {
+		t.Fatalf("%d models", len(all))
+	}
+	ids := fmt.Sprintf("[%d,%d]", all[0].ID, all[1].ID)
+	if code, body := send(t, srv, "POST", "/api/models/tags", `{"ids":`+ids+`,"add":[" Table Top ","dnd","DND"],"remove":[]}`); code != 200 ||
+		body != `{"added":["Table Top","dnd"],"models":2,"removed":[]}`+"\n" {
+		t.Errorf("bulk add: %d %s", code, body)
+	}
+	var tagged []modelSummary
+	getJSON(t, srv, "/api/models?tag=dnd", &tagged)
+	if len(tagged) != 2 {
+		t.Errorf("tagged %d", len(tagged))
+	}
+	if code, _ := send(t, srv, "POST", "/api/models/tags", `{"ids":`+ids+`,"remove":["dnd"]}`); code != 200 {
+		t.Errorf("bulk remove: %d", code)
+	}
+	getJSON(t, srv, "/api/models?tag=dnd", &tagged)
+	if len(tagged) != 0 {
+		t.Errorf("after remove %d", len(tagged))
+	}
+	// A tag typed in another case takes the spelling of the existing one.
+	send(t, srv, "POST", "/api/models/tags", `{"ids":`+ids+`,"add":["Boss Fight"]}`)
+	if code, body := send(t, srv, "POST", "/api/models/tags", `{"ids":`+ids+`,"add":["boss fight"]}`); code != 200 || !strings.Contains(body, `"added":["Boss Fight"]`) {
+		t.Errorf("canonical spelling: %d %s", code, body)
+	}
+	var tagList []struct {
+		Tag    string `json:"tag"`
+		Models int    `json:"models"`
+	}
+	getJSON(t, srv, "/api/tags", &tagList)
+	for _, tg := range tagList {
+		if strings.EqualFold(tg.Tag, "boss fight") && tg.Tag != "Boss Fight" {
+			t.Errorf("a second spelling appeared: %+v", tagList)
+		}
+	}
+	for _, bad := range []string{`{"ids":[],"add":["x"]}`, `{"ids":[1]}`, `{"ids":[1],"add":[""]}`} {
+		if code, _ := send(t, srv, "POST", "/api/models/tags", bad); code != 400 {
+			t.Errorf("%s: %d", bad, code)
+		}
+	}
+	if code, _ := send(t, srv, "POST", "/api/models/tags", `{"ids":[99999],"add":["x"]}`); code != 404 {
+		t.Errorf("unknown model: %d", code)
+	}
+}

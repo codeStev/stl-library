@@ -33,8 +33,54 @@ func (u UserData) now() int64 {
 
 // SetTags replaces a model's tags (normalized, see library.NormalizeTags).
 func (u UserData) SetTags(ctx context.Context, modelID int64, tags []string) ([]string, error) {
-	tags = library.NormalizeTags(tags)
+	tags, err := u.canonical(ctx, library.NormalizeTags(tags))
+	if err != nil {
+		return nil, err
+	}
 	return tags, u.Store.SetTags(ctx, modelID, tags)
+}
+
+// canonical spells each tag like the existing tag of the same name
+// ("painted" for "Painted"), so a typo in the case never makes a second tag.
+func (u UserData) canonical(ctx context.Context, tags []string) ([]string, error) {
+	if len(tags) == 0 {
+		return tags, nil
+	}
+	existing, err := u.Store.Tags(ctx)
+	if err != nil {
+		return nil, err
+	}
+	spelling := map[string]string{}
+	for _, t := range existing {
+		spelling[strings.ToLower(t.Tag)] = t.Tag
+	}
+	out := make([]string, len(tags))
+	for i, t := range tags {
+		if s, ok := spelling[strings.ToLower(t)]; ok {
+			t = s
+		}
+		out[i] = t
+	}
+	return out, nil
+}
+
+// maxBulk bounds one bulk edit.
+const maxBulk = 5000
+
+// EditTags adds and removes tags on the given models (normalized like
+// SetTags). It returns the tags as stored.
+func (u UserData) EditTags(ctx context.Context, modelIDs []int64, add, remove []string) (added, removed []string, err error) {
+	added, removed = library.NormalizeTags(add), library.NormalizeTags(remove)
+	if len(modelIDs) == 0 || len(modelIDs) > maxBulk || len(added)+len(removed) == 0 {
+		return nil, nil, ErrInvalid
+	}
+	if added, err = u.canonical(ctx, added); err != nil {
+		return nil, nil, err
+	}
+	if removed, err = u.canonical(ctx, removed); err != nil {
+		return nil, nil, err
+	}
+	return added, removed, u.Store.EditTags(ctx, modelIDs, added, removed)
 }
 
 // SetDisplayName sets the name shown instead of the folder name; an empty

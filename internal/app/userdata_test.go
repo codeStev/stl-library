@@ -18,6 +18,13 @@ type userStore struct {
 	dequeued bool
 }
 
+func (u *userStore) Tags(context.Context) ([]TagCount, error) {
+	return []TagCount{{Tag: "Painted", Models: 3}}, nil
+}
+func (u *userStore) EditTags(_ context.Context, _ []int64, add, remove []string) error {
+	u.tags = append(append([]string{}, add...), "-"+strings.Join(remove, ","))
+	return nil
+}
 func (u *userStore) SetTags(_ context.Context, _ int64, t []string) error { u.tags = t; return nil }
 func (u *userStore) SetDisplayName(_ context.Context, _ int64, n string) error {
 	u.name = n
@@ -28,6 +35,20 @@ func (u *userStore) AddPrint(_ context.Context, _ int64, at int64, note string) 
 	return Print{ID: 1, AtUnix: at, Note: note}, nil
 }
 func (u *userStore) Dequeue(context.Context, int64) error { u.dequeued = true; return ErrNotFound }
+
+func TestTagsTakeTheSpellingOfAnExistingTag(t *testing.T) {
+	s := &userStore{}
+	u := UserData{Store: s}
+	ctx := context.Background()
+	tags, err := u.SetTags(ctx, 1, []string{"painted", "new one"})
+	if err != nil || strings.Join(tags, ",") != "Painted,new one" {
+		t.Errorf("set: %v %v", tags, err)
+	}
+	added, removed, err := u.EditTags(ctx, []int64{1, 2}, []string{"PAINTED"}, []string{"painted"})
+	if err != nil || strings.Join(added, ",") != "Painted" || strings.Join(removed, ",") != "Painted" {
+		t.Errorf("edit: %v %v %v", added, removed, err)
+	}
+}
 
 func TestUserDataNormalizesAndValidates(t *testing.T) {
 	s := &userStore{}

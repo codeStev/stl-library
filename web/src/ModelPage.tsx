@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { api, DIM_VALUES, displayName, formatBytes, formatDate, printable, type DimKey, type FileRef, type ModelDetail, type Variant } from "./api";
+import { api, DIM_VALUES, displayName, formatBytes, formatDate, printable, type DimKey, type FileRef, type ModelDetail, type Tag, type Variant } from "./api";
+import { TagPicker } from "./TagPicker";
 
 // three.js is large; it loads only when a 3D view is opened.
 const Viewer = lazy(() => import("./Viewer"));
@@ -257,7 +258,10 @@ function NameEditor({ m, act }: { m: ModelDetail; act: Act }) {
 }
 
 function TagEditor({ m, act }: { m: ModelDetail; act: Act }) {
-  const [text, setText] = useState("");
+  const [existing, setExisting] = useState<Tag[]>([]);
+  useEffect(() => {
+    api.tags().then(setExisting, () => {});
+  }, [m.tags.length]);
   const save = (tags: string[]) => act(api.setTags(m.id, tags));
   return (
     <div className="tags editable">
@@ -269,15 +273,7 @@ function TagEditor({ m, act }: { m: ModelDetail; act: Act }) {
           </button>
         </span>
       ))}
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          const add = text.split(",").map((t) => t.trim()).filter(Boolean);
-          if (add.length) act(api.setTags(m.id, [...m.tags, ...add]).then(() => setText("")));
-        }}
-      >
-        <input value={text} onChange={(e) => setText(e.target.value)} placeholder="add tag…" maxLength={200} />
-      </form>
+      <TagPicker existing={existing} skip={m.tags} onPick={(t) => save([...m.tags, t])} />
     </div>
   );
 }

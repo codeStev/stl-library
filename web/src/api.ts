@@ -225,6 +225,8 @@ export const api = {
     get<ModelSummary[]>(`/api/models?${new URLSearchParams({ ...f, offset: String(offset), limit: String(limit) })}`),
   tags: () => get<Tag[]>("/api/tags"),
   setTags: (modelId: number, tags: string[]) => send<{ tags: string[] }>("PUT", `/api/models/${modelId}/tags`, { tags }),
+  editTags: (ids: number[], add: string[], remove: string[]) =>
+    send<{ models: number; added: string[]; removed: string[] }>("POST", "/api/models/tags", { ids, add, remove }),
   setName: (modelId: number, name: string) => send("PUT", `/api/models/${modelId}/name`, { name }),
   markPrinted: (variantId: number, note: string) => send<Print>("POST", `/api/variants/${variantId}/prints`, { note }),
   deletePrint: (id: number) => send("DELETE", `/api/prints/${id}`),

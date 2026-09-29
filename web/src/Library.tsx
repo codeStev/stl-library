@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { TagPicker } from "./TagPicker";
 import { api, displayName, type Creator, type Filters, type ModelSummary, type Tag } from "./api";
 
 const PAGE = 60;
@@ -22,6 +23,9 @@ export function Library() {
   const [models, setModels] = useState<ModelSummary[]>([]);
   const [more, setMore] = useState(false);
   const [error, setError] = useState("");
+  const [selecting, setSelecting] = useState(false);
+  const [picked, setPicked] = useState<Set<number>>(new Set());
+  const [note, setNote] = useState("");
   const seq = useRef(0);
   const set = (patch: Partial<Filters>) => setF((prev) => ({ ...prev, ...patch }));
 
@@ -45,6 +49,30 @@ export function Library() {
     }, 200);
     return () => clearTimeout(t);
   }, [f]);
+
+  const toggle = (id: number) =>
+    setPicked((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  const stopSelecting = () => {
+    setSelecting(false);
+    setPicked(new Set());
+    setNote("");
+  };
+  // Tags on the selected models, so one can be taken off all of them.
+  const pickedTags = [...new Set(models.filter((m) => picked.has(m.id)).flatMap((m) => m.tags))].sort();
+  const edit = (add: string[], remove: string[]) =>
+    api.editTags([...picked], add, remove).then(
+      () => {
+        setNote(`${add.length ? `Added “${add.join("”, “")}”` : `Removed “${remove.join("”, “")}”`} on ${picked.size} model${picked.size === 1 ? "" : "s"}`);
+        setError("");
+        api.tags().then(setTags, () => {});
+        return api.models(f, 0, Math.max(models.length, PAGE)).then(setModels);
+      },
+      (e) => setError(String(e)),
+    );
 
   const loadMore = () =>
     api.models(f, models.length, PAGE).then((ms) => {
@@ -85,16 +113,61 @@ export function Library() {
           <option value="yes">Printed</option>
           <option value="no">Never printed</option>
         </select>
+        <button className={`chip${selecting ? " active" : ""}`} onClick={() => (selecting ? stopSelecting() : setSelecting(true))}>
+          {selecting ? "Done selecting" : "Select models"}
+        </button>
         <label className="check">
           <input type="checkbox" checked={f.hidden === "yes"} onChange={(e) => set({ hidden: e.target.checked ? "yes" : "" })} />
           show hidden
         </label>
       </div>
       {error && <p className="error">{error}</p>}
+      {selecting && (
+        <div className="bulkbar">
+          <strong>{picked.size} selected</strong>
+          <button className="link" onClick={() => setPicked(new Set(models.map((m) => m.id)))}>
+            all {models.length} shown
+          </button>
+          <button className="link" onClick={() => setPicked(new Set())} disabled={picked.size === 0}>
+            none
+          </button>
+          {picked.size > 0 && (
+            <>
+              <span>Add tag</span>
+              <TagPicker existing={tags} onPick={(t) => edit([t], [])} placeholder="pick or create a tag…" />
+              {pickedTags.length > 0 && (
+                <>
+                  <span>Remove tag</span>
+                  <select value="" onChange={(e) => e.target.value && edit([], [e.target.value])}>
+                    <option value="">choose…</option>
+                    {pickedTags.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                </>
+              )}
+            </>
+          )}
+          {note && <span className="note">{note}</span>}
+        </div>
+      )}
       <div className="grid">
         {models.map((m) => (
-          <a key={m.id} className={`card${m.hidden ? " hidden-model" : ""}`} href={`#/model/${m.id}`}>
+          <a
+            key={m.id}
+            className={`card${m.hidden ? " hidden-model" : ""}${picked.has(m.id) ? " picked" : ""}`}
+            href={`#/model/${m.id}`}
+            onClick={(e) => {
+              if (selecting) {
+                e.preventDefault();
+                toggle(m.id);
+              }
+            }}
+          >
             <div className="cover">
+              {selecting && <span className={`tick${picked.has(m.id) ? " on" : ""}`}>{picked.has(m.id) ? "✓" : ""}</span>}
               {m.preview ? <img src={api.previewURL(m.id)} alt="" loading="lazy" /> : <span>no preview</span>}
               {m.prints > 0 && <span className="badge">printed{m.prints > 1 ? ` ×${m.prints}` : ""}</span>}
             </div>
