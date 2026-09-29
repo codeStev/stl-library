@@ -26,6 +26,19 @@ export interface FileRef {
   size: number;
 }
 
+// A part file seen from a plate link (see the slice contents).
+export interface PartLink {
+  partId?: number;
+  path: string;
+  name: string;
+  modelId?: number;
+  modelName?: string;
+  count: number;
+  missing?: boolean;
+}
+
+export const isSliced = (name: string) => /\.(ctb|cbddlp|goo|chitubox|lys|lyt|photon|pws)$/i.test(name);
+
 export type DimKey = "scale" | "supports" | "density" | "format" | "fill" | "split" | "tech" | "extra";
 
 export interface Print {
@@ -255,6 +268,10 @@ export const api = {
   requestImport: (source: string) => send("POST", "/api/imports/request", { source }),
   enqueue: (variantId: number, note = "") => send("PUT", `/api/variants/${variantId}/queue`, { note }),
   dequeue: (variantId: number) => send("DELETE", `/api/variants/${variantId}/queue`),
+  sliceContents: (partId: number) => get<{ contents: PartLink[]; usedIn: PartLink[] }>(`/api/parts/${partId}/contents`),
+  setSliceContents: (partId: number, items: { partId: number; count: number }[]) =>
+    send("PUT", `/api/parts/${partId}/contents`, { items }),
+  variantSlices: (variantId: number) => get<{ parts: Record<string, PartLink[]> }>(`/api/variants/${variantId}/slices`),
   model: (id: number) => get<ModelDetail>(`/api/models/${id}`),
   creators: () => get<Creator[]>("/api/creators"),
   issues: () => get<Issue[]>("/api/issues"),

@@ -494,3 +494,40 @@ func TestEditTagsAddsAndRemovesOnManyModelsKeepingTheirOthers(t *testing.T) {
 		t.Errorf("a failed edit must not apply partly: %+v", hits)
 	}
 }
+
+func TestSliceLinksSurviveRescansAndShowAMissingFile(t *testing.T) {
+	s, ctx := open(t), context.Background()
+	plate := "Loot Studios/Abyssal Haze/Enemies/Bell Head/32mm/Supported/plate.ctb"
+	paths := append(append([]string{}, libraryV1...), plate)
+	if _, err := sync(s, paths...); err != nil {
+		t.Fatal(err)
+	}
+	id := func(p string) int64 {
+		var n int64
+		if err := s.db.QueryRow(`SELECT id FROM part WHERE path = ?`, p).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	stl := "Loot Studios/Abyssal Haze/Enemies/Bell Head/32mm/Supported/bell.stl"
+	if err := s.SetSliceContents(ctx, id(plate), []app.SliceItem{{PartID: id(stl), Count: 3}}); err != nil {
+		t.Fatal(err)
+	}
+	// A rescan that adds files keeps the link.
+	if _, err := sync(s, append(paths, "Loot Studios/Abyssal Haze/Enemies/Bell Head/32mm/Supported/extra.stl")...); err != nil {
+		t.Fatal(err)
+	}
+	info, err := s.SliceContents(ctx, id(plate))
+	if err != nil || len(info.Contents) != 1 || info.Contents[0].Count != 3 || info.Contents[0].Missing || info.Contents[0].ModelName != "Bell Head" {
+		t.Fatalf("after rescan: %+v %v", info, err)
+	}
+	// The part disappears: the link stays and says so.
+	if _, err := sync(s, plate, "Artisan Guild/Noble Alfar/Goldhorn Cervid Rider/Supported/r.stl",
+		"Loot Studios/Abyssal Haze/Enemies/Bell Head/32mm/Supported/keep.stl"); err != nil {
+		t.Fatal(err)
+	}
+	info, err = s.SliceContents(ctx, id(plate))
+	if err != nil || len(info.Contents) != 1 || !info.Contents[0].Missing || info.Contents[0].Path != stl {
+		t.Fatalf("after the part is gone: %+v %v", info, err)
+	}
+}

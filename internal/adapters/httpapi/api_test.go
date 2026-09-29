@@ -610,3 +610,90 @@ func TestBulkTagEdit(t *testing.T) {
 		t.Errorf("unknown model: %d", code)
 	}
 }
+
+func TestSliceContentsBothDirections(t *testing.T) {
+	srv := server(t)
+	var hits []modelSummary
+	getJSON(t, srv, "/api/models?q=bell", &hits)
+	var m modelDetail
+	getJSON(t, srv, "/api/models/"+itoa(hits[0].ID), &m)
+	ids := map[string]int64{}
+	var variantID int64
+	for _, v := range m.Variants {
+		for _, p := range v.Parts {
+			ids[p.Name] = p.ID
+			if p.Name == "bell.stl" {
+				variantID = v.ID
+			}
+		}
+	}
+	plate, stl := ids["base.lys"], ids["bell.stl"]
+	if plate == 0 || stl == 0 || variantID == 0 {
+		t.Fatalf("parts %v", ids)
+	}
+	put := func(id int64, body string) int {
+		code, _ := send(t, srv, "PUT", "/api/parts/"+itoa(id)+"/contents", body)
+		return code
+	}
+	// bell.lys and bell.stl in the same plate, the stl twice (counts add up).
+	if code := put(plate, `{"items":[{"partId":`+itoa(stl)+`,"count":4},{"partId":`+itoa(stl)+`,"count":2}]}`); code != 204 {
+		t.Fatalf("set contents: %d", code)
+	}
+	var c struct {
+		Contents, UsedIn []struct {
+			PartID    int64  `json:"partId"`
+			Name      string `json:"name"`
+			ModelName string `json:"modelName"`
+			Count     int    `json:"count"`
+		}
+	}
+	getJSON(t, srv, "/api/parts/"+itoa(plate)+"/contents", &c)
+	if len(c.Contents) != 1 || c.Contents[0].Name != "bell.stl" || c.Contents[0].Count != 6 || c.Contents[0].ModelName != "Bell Head" || len(c.UsedIn) != 0 {
+		t.Errorf("plate: %+v", c)
+	}
+	getJSON(t, srv, "/api/parts/"+itoa(stl)+"/contents", &c)
+	if len(c.UsedIn) != 1 || c.UsedIn[0].Name != "base.lys" || c.UsedIn[0].Count != 6 || len(c.Contents) != 0 {
+		t.Errorf("stl: %+v", c)
+	}
+	var cov struct {
+		Parts map[string][]struct {
+			Name  string `json:"name"`
+			Count int    `json:"count"`
+		} `json:"parts"`
+	}
+	getJSON(t, srv, "/api/variants/"+itoa(variantID)+"/slices", &cov)
+	if got := cov.Parts[itoa(stl)]; len(got) != 1 || got[0].Name != "base.lys" {
+		t.Errorf("coverage: %+v", cov)
+	}
+	// Rules: only sliced files hold contents, no zero counts, no self-reference, known parts only.
+	for _, bad := range []struct {
+		id   int64
+		body string
+	}{
+		{stl, `{"items":[{"partId":` + itoa(plate) + `,"count":1}]}`},
+		{plate, `{"items":[{"partId":` + itoa(stl) + `,"count":0}]}`},
+		{plate, `{"items":[{"partId":` + itoa(plate) + `,"count":1}]}`},
+	} {
+		if code := put(bad.id, bad.body); code != 400 {
+			t.Errorf("%s on %d: %d", bad.body, bad.id, code)
+		}
+	}
+	if code := put(plate, `{"items":[{"partId":99999,"count":1}]}`); code != 404 {
+		t.Errorf("unknown part: %d", code)
+	}
+	if code := put(99999, `{"items":[]}`); code != 404 {
+		t.Errorf("unknown plate: %d", code)
+	}
+	// The failed edits changed nothing; an empty list clears the plate.
+	getJSON(t, srv, "/api/parts/"+itoa(plate)+"/contents", &c)
+	if len(c.Contents) != 1 {
+		t.Errorf("failed edits must not change anything: %+v", c)
+	}
+	if code := put(plate, `{"items":[]}`); code != 204 {
+		t.Errorf("clear: %d", code)
+	}
+	getJSON(t, srv, "/api/parts/"+itoa(stl)+"/contents", &c)
+	if len(c.UsedIn) != 0 {
+		t.Errorf("cleared: %+v", c)
+	}
+}

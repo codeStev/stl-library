@@ -229,3 +229,15 @@ table.roster select { font: inherit; background: var(--panel); color: var(--text
 .card.picked { outline: 2px solid var(--accent); }
 .tick { position: absolute; top: 6px; left: 6px; width: 22px; height: 22px; border-radius: 6px; border: 2px solid #fff; background: rgba(0, 0, 0, .45); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 14px; z-index: 2; }
 .tick.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+
+/* slice contents */
+.parts li.open { flex-wrap: wrap; }
+.inplates { font-size: 11px; padding: 1px 8px; margin-right: 8px; border-radius: 999px; background: var(--line); color: var(--text); cursor: help; }
+.slice-editor { flex-basis: 100%; margin: 8px 0 4px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.slice-editor ul { list-style: none; margin: 8px 0; padding: 0; }
+.slice-editor li { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.slice-editor li.missing .name { text-decoration: line-through; }
+.slice-editor input[type=number] { width: 64px; }
+.slice-editor .name { flex: 1; }
+.slice-add { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0; }
+.slice-editor .muted { color: var(--muted, #888); font-size: 12px; }

@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { api, DIM_VALUES, displayName, formatBytes, formatDate, printable, type DimKey, type FileRef, type ModelDetail, type Tag, type Variant } from "./api";
+import { api, DIM_VALUES, displayName, formatBytes, formatDate, isSliced, printable, type DimKey, type FileRef, type ModelDetail, type PartLink, type Tag, type Variant } from "./api";
+import { SliceEditor } from "./SliceEditor";
 import { TagPicker } from "./TagPicker";
 
 // three.js is large; it loads only when a 3D view is opened.
@@ -37,6 +38,13 @@ function pick(variants: Variant[], current: Variant, k: Key, val: string): Varia
 export function ModelPage({ id }: { id: number }) {
   const [m, setM] = useState<ModelDetail | null>(null);
   const [sel, setSel] = useState<Variant | null>(null);
+  const [links, setLinks] = useState<Record<string, PartLink[]>>({});
+  const [editing, setEditing] = useState<number | null>(null); // the sliced file whose contents are open
+  const [linkTick, setLinkTick] = useState(0);
+  useEffect(() => {
+    if (!sel) return;
+    api.variantSlices(sel.id).then((r) => setLinks(r.parts), () => setLinks({}));
+  }, [sel?.id, linkTick]);
   const [image, setImage] = useState(0);
   const [error, setError] = useState("");
   const [viewing, setViewing] = useState<FileRef | null>(null);
@@ -194,9 +202,22 @@ export function ModelPage({ id }: { id: number }) {
               )}
               <ul className="parts">
                 {sel.parts.map((p) => (
-                  <li key={p.id}>
+                  <li key={p.id} className={editing === p.id ? "open" : ""}>
                     <a href={api.partURL(p.id)}>{p.name}</a>
                     <span>
+                      {links[p.id] && (
+                        <span
+                          className="inplates"
+                          title={links[p.id].map((l) => `${l.name} ×${l.count}${l.modelName ? ` (${l.modelName})` : ""}`).join("\n")}
+                        >
+                          in {links[p.id].length} plate{links[p.id].length === 1 ? "" : "s"}
+                        </span>
+                      )}
+                      {isSliced(p.name) && (
+                        <button className="view3d" onClick={() => setEditing(editing === p.id ? null : p.id)}>
+                          Contains…
+                        </button>
+                      )}
                       {printable(p.name) && <SendToPrinter part={p} />}
                       {viewable(p.name) && (
                         <button className="view3d" onClick={() => setViewing(p)}>
@@ -205,6 +226,17 @@ export function ModelPage({ id }: { id: number }) {
                       )}
                       {formatBytes(p.size)}
                     </span>
+                    {editing === p.id && (
+                      <SliceEditor
+                        part={p}
+                        model={m}
+                        onSaved={() => {
+                          setLinkTick((n) => n + 1);
+                          setEditing(null);
+                        }}
+                        onCancel={() => setEditing(null)}
+                      />
+                    )}
                   </li>
                 ))}
               </ul>
