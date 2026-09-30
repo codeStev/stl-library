@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { Library } from "./Library";
 import { Collections } from "./Collections";
 import { Prints } from "./Prints";
+import { Health } from "./Health";
 import { ModelPage } from "./ModelPage";
 import { Issues } from "./Issues";
 import { Queue } from "./Queue";
@@ -40,6 +41,7 @@ function App({ me, signOut }: { me: Me; signOut: () => void }) {
           <a href="#/">Library</a>
           <a href="#/collections">Collections</a>
           <a href="#/prints">Prints</a>
+          <a href="#/health">Health</a>
           <a href="#/queue">Print queue</a>
           <a href="#/printer">Printer</a>
           <a href="#/imports">Imports</a>
@@ -58,6 +60,8 @@ function App({ me, signOut }: { me: Me; signOut: () => void }) {
           <ModelPage id={Number(model[1])} />
         ) : route.startsWith("#/issues") ? (
           <Issues />
+        ) : route.startsWith("#/health") ? (
+          <Health admin={admin} />
         ) : route.startsWith("#/prints") || route.startsWith("#/print/") ? (
           <Prints id={Number(route.match(/^#\/print\/(\d+)/)?.[1]) || null} />
         ) : route.startsWith("#/collections") ? (

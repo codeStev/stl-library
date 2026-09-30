@@ -26,9 +26,9 @@ header {
   display: flex; align-items: center; gap: 24px; padding: 12px 20px;
   background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 1;
 }
-header .brand { font-weight: 700; text-decoration: none; }
-header nav { display: flex; gap: 16px; }
-header nav a { color: var(--muted); text-decoration: none; }
+header .brand { font-weight: 700; text-decoration: none; white-space: nowrap; }
+header nav { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+header nav a { color: var(--muted); text-decoration: none; white-space: nowrap; }
 main { padding: 20px; max-width: 1400px; margin: 0 auto; }
 
 .toolbar { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
@@ -334,3 +334,9 @@ table.roster select { font: inherit; background: var(--panel); color: var(--text
   .collection-list li { flex-wrap: wrap; row-gap: 4px; }
   h1 { font-size: 22px; }
 }
+
+/* health */
+.health section { margin: 18px 0 26px; }
+.dup-group { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin: 10px 0; background: var(--panel); }
+.dup-head { font-size: 14px; margin-bottom: 4px; }
+.dup-group .name { word-break: break-all; }

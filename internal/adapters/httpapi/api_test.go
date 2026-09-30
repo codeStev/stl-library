@@ -33,7 +33,17 @@ import (
 )
 
 // server builds a small library on disk, scans it and serves the API.
-func server(t *testing.T) *httptest.Server {
+// env is a test server with the pieces tests reach into.
+type env struct {
+	srv    *httptest.Server
+	health *app.Health
+	store  *sqlite.Store
+	root   string
+}
+
+func server(t *testing.T) *httptest.Server { return newServer(t).srv }
+
+func newServer(t *testing.T) env {
 	t.Helper()
 	root := t.TempDir()
 	for p, content := range map[string]string{
@@ -59,12 +69,13 @@ func server(t *testing.T) *httptest.Server {
 		t.Fatal(err)
 	}
 	files := disk.Files{Root: root}
+	health := &app.Health{Store: store, Files: files}
 	previews := disk.PreviewStore{Dir: t.TempDir()}
 	thumbs := app.NewThumbs(store, files, disk.ThumbCache{Dir: t.TempDir()})
 	thumbs.Overrides = previews
-	srv := httptest.NewServer((&API{Store: store, Files: files, Thumbs: thumbs, Plates: disk.PlateStore{Dir: t.TempDir()}, Previews: previews, User: app.UserData{Store: store}}).Handler())
+	srv := httptest.NewServer((&API{Store: store, Files: files, Health: health, Thumbs: thumbs, Plates: disk.PlateStore{Dir: t.TempDir()}, Previews: previews, User: app.UserData{Store: store}}).Handler())
 	t.Cleanup(srv.Close)
-	return srv
+	return env{srv, health, store, root}
 }
 
 func get(t *testing.T, srv *httptest.Server, path string) (*http.Response, []byte) {
@@ -1263,5 +1274,117 @@ func TestChosenPreviewOverridesThenResets(t *testing.T) {
 	getJSON(t, srv, "/api/models?q=bell", &reset)
 	if reset[0].PreviewVersion != 0 {
 		t.Errorf("version after reset: %d", reset[0].PreviewVersion)
+	}
+}
+
+func TestHealthDuplicatesIntegrityAndMissingFiles(t *testing.T) {
+	e := newServer(t)
+	ctx := context.Background()
+	rescan := func() {
+		t.Helper()
+		if _, err := app.Scan(ctx, disk.Lister{Root: e.root}, e.store); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(rel, content string) string {
+		p := filepath.Join(e.root, rel)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte(content), 0o644)
+		return p
+	}
+	hashAll := func() {
+		t.Helper()
+		for {
+			n, err := e.health.Step(ctx, 100)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n == 0 {
+				return
+			}
+		}
+	}
+	type health struct {
+		Files, Hashed int
+		Corrupt       []struct {
+			ID   int64
+			Path string
+		}
+		Missing []struct{ Path string }
+	}
+	get := func() health {
+		var h health
+		getJSON(t, e.srv, "/api/health", &h)
+		return h
+	}
+
+	// A planted copy of a file in another model.
+	write("Artisan Guild/Noble Alfar/Kövön the Wise/bell-copy.stl", "STL")
+	rescan()
+	if h := get(); h.Hashed != 0 || h.Files == 0 {
+		t.Fatalf("nothing hashed yet: %+v", h)
+	}
+	hashAll()
+	if h := get(); h.Hashed != h.Files {
+		t.Fatalf("all hashed: %+v", h)
+	}
+	var dups struct {
+		Total  int
+		Groups []struct {
+			Size, Wasted int64
+			Files        []struct{ ModelName, Path string }
+		}
+	}
+	getJSON(t, e.srv, "/api/duplicates?min=0", &dups)
+	if dups.Total != 1 || len(dups.Groups) != 1 || len(dups.Groups[0].Files) != 2 || dups.Groups[0].Wasted != 3 {
+		t.Fatalf("duplicates: %+v", dups)
+	}
+	names := dups.Groups[0].Files[0].ModelName + "+" + dups.Groups[0].Files[1].ModelName
+	if !strings.Contains(names, "Bell Head") || !strings.Contains(names, "Kövön the Wise") {
+		t.Errorf("the copy is in another model: %s", names)
+	}
+	getJSON(t, e.srv, "/api/duplicates?min=1", &dups) // files of at least 1 KiB only
+	if dups.Total != 0 {
+		t.Errorf("small files are left out: %+v", dups)
+	}
+
+	// Silent corruption: other content, same size and date - found when the hashes are old enough to check again.
+	victim := filepath.Join(e.root, "Artisan Guild/Noble Alfar/Kövön the Wise/k.stl")
+	info, _ := os.Stat(victim)
+	os.WriteFile(victim, []byte("Z"), 0o644) // "K" before: same size
+	os.Chtimes(victim, info.ModTime(), info.ModTime())
+	e.health.Now = func() time.Time { return time.Now().Add(91 * 24 * time.Hour) }
+	hashAll()
+	h := get()
+	if len(h.Corrupt) == 0 {
+		t.Fatalf("the silent change is found: %+v", h)
+	}
+	if code, _ := send(t, e.srv, "POST", "/api/health/events/"+itoa(h.Corrupt[0].ID)+"/dismiss", ""); code != 204 {
+		t.Errorf("dismiss: %d", code)
+	}
+	if h2 := get(); len(h2.Corrupt) != len(h.Corrupt)-1 {
+		t.Errorf("dismissed: %d -> %d", len(h.Corrupt), len(h2.Corrupt))
+	}
+
+	// A moved file is not missing; a deleted one is.
+	e.health.Now = nil
+	moved := write("Loot Studios/Abyssal Haze/Enemies/Bell Head/32mm/No Supports/bell moved.stl", "MOVEME")
+	_ = moved
+	rescan()
+	hashAll()
+	os.Rename(moved, filepath.Join(e.root, "Loot Studios/Abyssal Haze/Enemies/Bell Head/32mm/No Supports/bell renamed.stl"))
+	lost := write("Loot Studios/Abyssal Haze/Enemies/Bell Head/32mm/No Supports/lost.stl", "GONE-FOR-EVER")
+	rescan()
+	hashAll()
+	os.Remove(lost)
+	rescan()
+	hashAll()
+	h = get()
+	var missing []string
+	for _, m := range h.Missing {
+		missing = append(missing, filepath.Base(m.Path))
+	}
+	if strings.Join(missing, ",") != "lost.stl" {
+		t.Errorf("only the deleted file is missing (a moved one is not): %v", missing)
 	}
 }

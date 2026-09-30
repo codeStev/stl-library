@@ -62,6 +62,19 @@ type Store interface {
 	// PrintedParts says how often each part of a variant was printed (in printed jobs).
 	PrintedParts(ctx context.Context, variantID int64) (map[int64]int, error)
 
+	// Library health: hashes of the files, duplicates, integrity events.
+	FilesToHash(ctx context.Context, limit int) ([]HashJob, error)
+	FilesToVerify(ctx context.Context, olderThan int64, limit int) ([]HashJob, error)
+	SaveHash(ctx context.Context, job HashJob, sum string, atUnix int64) error
+	// Verified records a re-check of an unchanged file: same content bumps the date, other content raises an event.
+	Verified(ctx context.Context, job HashJob, sum string, atUnix int64) (same bool, err error)
+	DuplicateGroups(ctx context.Context, minSize int64, limit, offset int) ([]DupGroup, int, error)
+	HealthEvents(ctx context.Context, kind string) ([]HealthEvent, error)
+	DismissHealthEvent(ctx context.Context, id int64) error
+	MissingContent(ctx context.Context) ([]HealthEvent, error)
+	HashCounts(ctx context.Context) (HealthCounts, error)
+	PruneHashes(ctx context.Context) error
+
 	// Contents of uploaded plates (same links as library plates).
 	UploadContents(ctx context.Context, uploadID string) ([]PartRef, error)
 	SetUploadContents(ctx context.Context, uploadID string, items []SliceItem) error

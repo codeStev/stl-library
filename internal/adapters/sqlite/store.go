@@ -187,6 +187,20 @@ var migrations = []string{
 	`ALTER TABLE model ADD COLUMN first_seen INTEGER NOT NULL DEFAULT 0;
 	UPDATE model SET first_seen = coalesce((SELECT min(p.mod_unix) FROM part p JOIN variant v ON v.id = p.variant_id WHERE v.model_id = model.id), 0);
 	CREATE INDEX model_first_seen ON model(first_seen);`,
+
+	// Library health: a hash per file (found by the background hasher) for the duplicate
+	// finder and the integrity check; events it raises (a file whose content changed
+	// although its size and date did not).
+	`CREATE TABLE file_hash (
+		path TEXT PRIMARY KEY, size INTEGER NOT NULL, mod_unix INTEGER NOT NULL,
+		sha256 TEXT NOT NULL, hashed_unix INTEGER NOT NULL, verified_unix INTEGER NOT NULL
+	);
+	CREATE INDEX file_hash_sha ON file_hash(sha256);
+	CREATE TABLE health_event (
+		id INTEGER PRIMARY KEY, kind TEXT NOT NULL, path TEXT NOT NULL, detail TEXT NOT NULL,
+		at_unix INTEGER NOT NULL, dismissed INTEGER NOT NULL DEFAULT 0
+	);
+	CREATE INDEX health_event_path ON health_event(path);`,
 }
 
 func migrate(db *sql.DB) error {

@@ -329,6 +329,11 @@ export const api = {
     const items = (await r.json()) as ModelSummary[];
     return { items, total: Number(r.headers.get("X-Total-Count") ?? items.length) };
   },
+  health: () => get<HealthState>("/api/health"),
+  healthRun: () => send("POST", "/api/health/run"),
+  healthPause: () => send("POST", "/api/health/pause"),
+  dismissHealthEvent: (id: number) => send("POST", `/api/health/events/${id}/dismiss`),
+  duplicates: (minKB: number, offset: number) => get<DuplicatePage>(`/api/duplicates?min=${minKB}&limit=25&offset=${offset}`),
   facets: () => get<Record<"scale" | "supports" | "format" | "fill", Facet[]>>("/api/facets"),
   tags: () => get<Tag[]>("/api/tags"),
   setTags: (modelId: number, tags: string[]) => send<{ tags: string[] }>("PUT", `/api/models/${modelId}/tags`, { tags }),
@@ -439,4 +444,34 @@ export function uploadPlate(file: File, onProgress: (done: number, total: number
     form.append("file", file);
     xhr.send(form);
   });
+}
+
+export interface HealthEvent {
+  id?: number;
+  path: string;
+  detail: string;
+  atUnix?: number;
+}
+export interface HealthState {
+  enabled: boolean;
+  files: number;
+  hashed: number;
+  running: boolean;
+  paused: boolean;
+  current?: string;
+  done: number;
+  errors: number;
+  corrupt: HealthEvent[];
+  missing: HealthEvent[];
+}
+export interface DuplicateGroup {
+  sha256: string;
+  size: number;
+  wasted: number;
+  files: { partId: number; path: string; modelId: number; modelName: string }[];
+}
+export interface DuplicatePage {
+  total: number;
+  wastedOnPage: number;
+  groups: DuplicateGroup[];
 }

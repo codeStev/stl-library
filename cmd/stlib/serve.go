@@ -84,6 +84,12 @@ func serve(ctx context.Context, root, data, listen string, every time.Duration, 
 
 	scanStatus := app.NewScanStatus()
 	api.Scan = scanStatus
+	health := &app.Health{Store: store, Files: files, Pause: 10 * time.Millisecond}
+	if os.Getenv("HEALTH_HASH") == "false" {
+		health.Stop() // off until someone starts it on the Health page
+	}
+	api.Health = health
+	go health.Run(ctx)
 	var importer *app.Importer
 	if imp != nil {
 		logArchiveTools(newDownloads(imp.source))
@@ -92,7 +98,7 @@ func serve(ctx context.Context, root, data, listen string, every time.Duration, 
 		api.Importer = importer
 		go importLoop(ctx, importer, notifications, imp.every, scanStatus)
 	}
-	go scanLoop(ctx, disk.Lister{Root: root}, store, thumbs, every, scanStatus)
+	go scanLoop(ctx, disk.Lister{Root: root}, store, thumbs, every, scanStatus, health)
 
 	errc := make(chan error, 1)
 	go func() {
@@ -149,7 +155,7 @@ func importLoop(ctx context.Context, im *app.Importer, notes *app.Notifications,
 // scanLoop rescans the library every interval, or when asked (an admin's
 // "Rescan now", a finished import); after a successful scan it drops stale
 // thumbnails and makes the missing ones.
-func scanLoop(ctx context.Context, l app.Lister, s app.Store, thumbs *app.Thumbs, every time.Duration, status *app.ScanStatus) {
+func scanLoop(ctx context.Context, l app.Lister, s app.Store, thumbs *app.Thumbs, every time.Duration, status *app.ScanStatus, health *app.Health) {
 	for {
 		start := time.Now()
 		status.Start(start)
@@ -172,6 +178,7 @@ func scanLoop(ctx context.Context, l app.Lister, s app.Store, thumbs *app.Thumbs
 		}
 		status.Done(time.Now(), st, err, pruned)
 		if err == nil {
+			health.Wake() // new and changed files to hash
 			start = time.Now()
 			made, failed := thumbs.WarmCovers(ctx)
 			if made+failed > 0 {

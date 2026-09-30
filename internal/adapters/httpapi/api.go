@@ -31,6 +31,8 @@ type API struct {
 	Plates app.PlateFiles
 	// Previews holds the pictures chosen as a model's preview (from the 3D viewer).
 	Previews app.PreviewOverrides
+	// Health hashes the files in the background (duplicate finder, integrity check).
+	Health *app.Health
 	// Importer is set when importing from a downloads folder is on.
 	Importer *app.Importer
 	// Printing handles the (optional) network printer.
@@ -90,6 +92,11 @@ func (a *API) Handler() http.Handler {
 	h("GET /api/settings/notifications", admin, a.notificationSettings)
 	h("PUT /api/settings/notifications", admin, a.saveNotificationSettings)
 	h("POST /api/settings/notifications/test", admin, a.testNotifications)
+	h("GET /api/health", full, a.health)
+	h("POST /api/health/run", admin, a.healthRun)
+	h("POST /api/health/pause", admin, a.healthPause)
+	h("POST /api/health/events/{id}/dismiss", admin, a.dismissHealthEvent)
+	h("GET /api/duplicates", full, a.duplicates)
 	h("GET /api/library/scan", full, a.scanState)
 	h("POST /api/library/scan", admin, a.requestScan)
 	h("GET /api/imports", full, a.imports)
@@ -884,6 +891,123 @@ func (a *API) uploadSliceMeta(w http.ResponseWriter, r *http.Request) {
 func (a *API) uploadSlicePreview(w http.ResponseWriter, r *http.Request) {
 	m, err := a.sliceMeta().OfUpload(r.Context(), r.PathValue("uid"))
 	writeSlicePreview(w, m, err)
+}
+
+type healthEventJSON struct {
+	ID     int64  `json:"id,omitempty"`
+	Path   string `json:"path"`
+	Detail string `json:"detail"`
+	AtUnix int64  `json:"atUnix,omitempty"`
+}
+
+func healthEvents(es []app.HealthEvent) []healthEventJSON {
+	out := make([]healthEventJSON, 0, len(es))
+	for _, e := range es {
+		out = append(out, healthEventJSON{e.ID, e.Path, e.Detail, e.AtUnix})
+	}
+	return out
+}
+
+// health reports how far the hashing is and what the integrity check found.
+func (a *API) health(w http.ResponseWriter, r *http.Request) {
+	counts, err := a.Store.HashCounts(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	corrupt, err := a.Store.HealthEvents(r.Context(), "corrupt")
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	missing, err := a.Store.MissingContent(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	var st app.HealthState
+	if a.Health != nil {
+		st = a.Health.State()
+	}
+	writeJSON(w, map[string]any{
+		"enabled": a.Health != nil,
+		"files":   counts.Files, "hashed": counts.Hashed,
+		"running": st.Running, "paused": st.Paused, "current": st.Current, "done": st.Done, "errors": st.Errors,
+		"corrupt": healthEvents(corrupt), "missing": healthEvents(missing),
+	})
+}
+
+func (a *API) healthRun(w http.ResponseWriter, r *http.Request) {
+	if a.Health == nil {
+		http.Error(w, "hashing is not enabled", http.StatusConflict)
+		return
+	}
+	a.Health.Resume()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) healthPause(w http.ResponseWriter, r *http.Request) {
+	if a.Health == nil {
+		http.Error(w, "hashing is not enabled", http.StatusConflict)
+		return
+	}
+	a.Health.Stop()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) dismissHealthEvent(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	if err := a.Store.DismissHealthEvent(r.Context(), id); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// duplicates lists sets of files with identical content (min: smallest file in KiB, default 64).
+func (a *API) duplicates(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	min := int64(64)
+	if v, err := strconv.ParseInt(q.Get("min"), 10, 64); err == nil && v >= 0 {
+		min = v
+	}
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	h := a.Health
+	if h == nil {
+		h = &app.Health{Store: a.Store}
+	}
+	groups, total, err := h.Duplicates(r.Context(), min<<10, limit, offset)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	type file struct {
+		PartID    int64  `json:"partId"`
+		Path      string `json:"path"`
+		ModelID   int64  `json:"modelId"`
+		ModelName string `json:"modelName"`
+	}
+	type group struct {
+		SHA256 string `json:"sha256"`
+		Size   int64  `json:"size"`
+		Wasted int64  `json:"wasted"`
+		Files  []file `json:"files"`
+	}
+	out := make([]group, 0, len(groups))
+	var wasted int64
+	for _, g := range groups {
+		gj := group{SHA256: g.SHA256, Size: g.Size, Wasted: g.Wasted(), Files: []file{}}
+		for _, f := range g.Files {
+			gj.Files = append(gj.Files, file{f.PartID, f.Path, f.ModelID, f.ModelName})
+		}
+		wasted += gj.Wasted
+		out = append(out, gj)
+	}
+	writeJSON(w, map[string]any{"total": total, "wastedOnPage": wasted, "groups": out})
 }
 
 // editTags adds and removes tags on many models at once.
