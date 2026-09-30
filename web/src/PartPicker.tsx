@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, displayName, type ModelDetail, type ModelSummary } from "./api";
+import { api, displayName, emptyFilters, type ModelDetail, type ModelSummary } from "./api";
 
 export interface PickedPart {
   id: number;
@@ -23,7 +23,7 @@ export function PartPicker({ onAdd, skip = [], exclude = () => false, label = "A
       return;
     }
     const t = setTimeout(() => {
-      api.models({ q, creator: "", tag: "", collection: "", printed: "", hidden: "" }, 0, 8).then(setHits, () => setHits([]));
+      api.models({ ...emptyFilters, q }, 0, 8).then(setHits, () => setHits([]));
     }, 200);
     return () => clearTimeout(t);
   }, [q]);

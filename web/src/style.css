@@ -290,3 +290,6 @@ table.roster select { font: inherit; background: var(--panel); color: var(--text
 .plate-info { flex-basis: 100%; display: flex; align-items: center; gap: 12px; padding: 4px 0 6px; font-size: 13px; }
 .plate-thumb { width: 96px; height: 72px; object-fit: cover; border-radius: 6px; background: #222; cursor: zoom-in; }
 .plate-thumb.big { width: min(400px, 100%); height: auto; cursor: zoom-out; }
+
+.toolbar.filters { margin-top: -6px; }
+.badge.new { left: 6px; right: auto; background: #2d8a4e; color: #fff; }

@@ -18,6 +18,8 @@ type Store interface {
 	CountModels(ctx context.Context, q Query) (int, error)
 	Model(ctx context.Context, id int64) (*ModelDetail, error)
 	Creators(ctx context.Context) ([]CreatorCount, error)
+	// Facets lists the values of the variant dimensions ("scale", "supports", "format", "fill") with their model counts.
+	Facets(ctx context.Context) (map[string][]FacetCount, error)
 	Issues(ctx context.Context) ([]library.Issue, error)
 	Variant(ctx context.Context, id int64) (*VariantDetail, error)
 	Image(ctx context.Context, id int64) (*FileRef, error)
@@ -87,10 +89,18 @@ type Query struct {
 	Tag     string
 	// Collection: only models in this collection (an id; 0 = all).
 	Collection int64
-	Printed    *bool // only printed (true) or never printed (false) models
-	Hidden     bool  // include hidden models
-	Limit      int
-	Offset     int
+	// Variant filters: the model has a variant with this value.
+	Scale, Supports, Format, Fill string
+	// HasPlate: only models with a sliced file (in the library, or an uploaded plate holding one of its parts).
+	HasPlate bool
+	// AddedDays: only models first seen within this many days (0 = all).
+	AddedDays int
+	// Sort: "" (name, or relevance for a text search), "added" (newest first) or "printed" (last printed first).
+	Sort    string
+	Printed *bool // only printed (true) or never printed (false) models
+	Hidden  bool  // include hidden models
+	Limit   int
+	Offset  int
 }
 
 // ModelSummary is one search hit.
@@ -112,6 +122,14 @@ type ModelSummary struct {
 	Tags        []string
 	Prints      int // how often a variant of it was printed
 	Hidden      bool
+	FirstSeen   int64 // when the scan first saw the model (files' date for models from before that was tracked)
+	LastPrinted int64 // the last time it was printed (a print record or a printed print), 0 if never
+}
+
+// FacetCount is a filter value with the number of models having it.
+type FacetCount struct {
+	Value  string
+	Models int
 }
 
 // ModelDetail is a model with its variants and images.

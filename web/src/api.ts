@@ -18,6 +18,8 @@ export interface ModelSummary {
   tags: string[];
   prints: number;
   hidden?: boolean;
+  addedUnix?: number;
+  lastPrintedUnix?: number;
 }
 
 export interface FileRef {
@@ -281,6 +283,24 @@ export interface Filters {
   collection: string; // a collection id, "" for all
   printed: "" | "yes" | "no";
   hidden: "" | "yes";
+  // Variant filters: the model has a variant with this value.
+  scale: string;
+  supports: string;
+  format: string;
+  fill: string;
+  plate: "" | "yes"; // has a sliced file (library or uploaded plate)
+  added: string; // first seen within this many days ("" = any)
+  sort: "" | "added" | "printed";
+}
+
+export const emptyFilters: Filters = {
+  q: "", creator: "", tag: "", collection: "", printed: "", hidden: "",
+  scale: "", supports: "", format: "", fill: "", plate: "", added: "", sort: "",
+};
+
+export interface Facet {
+  value: string;
+  models: number;
 }
 
 // Canonical values for relabeling (see the convention package).
@@ -308,6 +328,7 @@ export const api = {
     const items = (await r.json()) as ModelSummary[];
     return { items, total: Number(r.headers.get("X-Total-Count") ?? items.length) };
   },
+  facets: () => get<Record<"scale" | "supports" | "format" | "fill", Facet[]>>("/api/facets"),
   tags: () => get<Tag[]>("/api/tags"),
   setTags: (modelId: number, tags: string[]) => send<{ tags: string[] }>("PUT", `/api/models/${modelId}/tags`, { tags }),
   editTags: (ids: number[], add: string[], remove: string[]) =>
@@ -386,7 +407,7 @@ export const formatDate = (unix: number) => new Date(unix * 1000).toLocaleDateSt
 // showLibrary makes the library open with these filters, on its first page.
 export function showLibrary(f: Partial<Filters>) {
   try {
-    sessionStorage.setItem("filters", JSON.stringify({ q: "", creator: "", tag: "", collection: "", printed: "", hidden: "", ...f }));
+    sessionStorage.setItem("filters", JSON.stringify({ ...emptyFilters, ...f }));
     sessionStorage.setItem("libpage", "0");
     sessionStorage.removeItem("libscroll");
   } catch {

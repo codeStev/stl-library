@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 
@@ -180,6 +181,12 @@ var migrations = []string{
 		ref TEXT NOT NULL, PRIMARY KEY (job_id, ref)
 	);
 	CREATE TABLE upload (id TEXT PRIMARY KEY, name TEXT NOT NULL, size INTEGER NOT NULL, created_unix INTEGER NOT NULL);`,
+
+	// When a model was first seen (for "new" and sorting); models from before this
+	// migration get the date of their oldest file.
+	`ALTER TABLE model ADD COLUMN first_seen INTEGER NOT NULL DEFAULT 0;
+	UPDATE model SET first_seen = coalesce((SELECT min(p.mod_unix) FROM part p JOIN variant v ON v.id = p.variant_id WHERE v.model_id = model.id), 0);
+	CREATE INDEX model_first_seen ON model(first_seen);`,
 }
 
 func migrate(db *sql.DB) error {
@@ -291,8 +298,8 @@ func (s *Store) writeModel(ctx context.Context, tx *sql.Tx, id int64, m *library
 		}
 	}
 	if id == 0 {
-		res, err := tx.ExecContext(ctx, `INSERT INTO model (dir, creator, release, category, name, variants, parts, bytes, sig) VALUES (?,?,?,?,?,?,?,?,?)`,
-			m.Dir, m.Creator, m.Release, m.Category, m.Name, len(m.Variants), parts, bytes, sig)
+		res, err := tx.ExecContext(ctx, `INSERT INTO model (dir, creator, release, category, name, variants, parts, bytes, sig, first_seen) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			m.Dir, m.Creator, m.Release, m.Category, m.Name, len(m.Variants), parts, bytes, sig, time.Now().Unix())
 		if err != nil {
 			return err
 		}
@@ -454,6 +461,22 @@ func searchParts(q app.Query) (from string, where []string, args []any, order st
 		where = append(where, `EXISTS (SELECT 1 FROM collection_model cm WHERE cm.dir = m.dir AND cm.collection_id = ?)`)
 		args = append(args, q.Collection)
 	}
+	for _, f := range []struct{ col, val string }{{"scale", q.Scale}, {"supports", q.Supports}, {"format", q.Format}, {"fill", q.Fill}} {
+		if f.val != "" {
+			where = append(where, `EXISTS (SELECT 1 FROM variant v WHERE v.model_id = m.id AND coalesce((SELECT l.`+f.col+` FROM variant_label l WHERE l.dir = v.dir), v.`+f.col+`) = ?)`)
+			args = append(args, f.val)
+		}
+	}
+	if q.HasPlate {
+		where = append(where, `(EXISTS (SELECT 1 FROM variant v JOIN part p ON p.variant_id = v.id WHERE v.model_id = m.id AND
+				(lower(p.path) LIKE '%.ctb' OR lower(p.path) LIKE '%.cbddlp' OR lower(p.path) LIKE '%.goo' OR lower(p.path) LIKE '%.photon' OR lower(p.path) LIKE '%.pws'))
+			OR EXISTS (SELECT 1 FROM slice_content sc JOIN part p ON p.path = sc.part_path JOIN variant v ON v.id = p.variant_id
+				WHERE v.model_id = m.id AND sc.slice_path LIKE 'upload:%'))`)
+	}
+	if q.AddedDays > 0 {
+		where = append(where, `m.first_seen >= ?`)
+		args = append(args, time.Now().Unix()-int64(q.AddedDays)*86400)
+	}
 	if !q.Hidden {
 		where = append(where, `NOT EXISTS (SELECT 1 FROM model_user u WHERE u.dir = m.dir AND u.hidden)`)
 	}
@@ -463,6 +486,12 @@ func searchParts(q app.Query) (from string, where []string, args []any, order st
 			not = ""
 		}
 		where = append(where, not+`EXISTS (SELECT 1 FROM print pr WHERE pr.dir = m.dir)`)
+	}
+	switch q.Sort {
+	case "added":
+		order = `m.first_seen DESC, m.id DESC`
+	case "printed":
+		order = lastPrinted + ` DESC, m.first_seen DESC`
 	}
 	return from, where, args, order
 }
@@ -487,12 +516,19 @@ const summaryCols = `m.id, m.creator, m.release, m.category, m.name, m.dir, m.va
 	coalesce((SELECT display_name FROM model_user u WHERE u.dir = m.dir), ''),
 	coalesce((SELECT group_concat(tag, char(31)) FROM (SELECT tag FROM tag t WHERE t.dir = m.dir ORDER BY tag COLLATE NOCASE)), ''),
 	(SELECT count(*) FROM print pr WHERE pr.dir = m.dir),
-	coalesce((SELECT hidden FROM model_user u WHERE u.dir = m.dir), 0)`
+	coalesce((SELECT hidden FROM model_user u WHERE u.dir = m.dir), 0),
+	m.first_seen, ` + lastPrinted
+
+// lastPrinted is the last time a model was printed: a print record of a variant, or a printed
+// print holding one of its parts.
+const lastPrinted = `max(coalesce((SELECT max(pr.printed_unix) FROM print pr WHERE pr.dir = m.dir), 0),
+	coalesce((SELECT max(j.printed_unix) FROM job_item i JOIN print_job j ON j.id = i.job_id AND j.state = 'printed'
+		JOIN part p ON p.path = i.part_path JOIN variant v ON v.id = p.variant_id WHERE v.model_id = m.id), 0))`
 
 func scanSummary(row interface{ Scan(...any) error }, m *app.ModelSummary) error {
 	var tags string
 	if err := row.Scan(&m.ID, &m.Creator, &m.Release, &m.Category, &m.Name, &m.Dir, &m.Variants, &m.Parts, &m.Bytes,
-		&m.Cover, &m.Renderable, &m.DisplayName, &tags, &m.Prints, &m.Hidden); err != nil {
+		&m.Cover, &m.Renderable, &m.DisplayName, &tags, &m.Prints, &m.Hidden, &m.FirstSeen, &m.LastPrinted); err != nil {
 		return err
 	}
 	if tags != "" {

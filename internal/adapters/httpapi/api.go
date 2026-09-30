@@ -66,6 +66,7 @@ func (a *API) Handler() http.Handler {
 	h("GET /api/models/{id}", full, a.model)
 	h("GET /api/models/{id}/thumb", full, a.modelThumb)
 	h("GET /api/creators", full, a.creators)
+	h("GET /api/facets", full, a.facets)
 	h("GET /api/issues", full, a.issues)
 	h("GET /api/variants/{id}/zip", full, a.variantZip)
 	h("GET /api/parts/{id}", full, a.part)
@@ -145,6 +146,9 @@ type modelSummary struct {
 	Tags        []string `json:"tags"`
 	Prints      int      `json:"prints"`
 	Hidden      bool     `json:"hidden,omitempty"`
+	// AddedUnix: when the scan first saw the model; LastPrintedUnix: its last print, if any.
+	AddedUnix       int64 `json:"addedUnix,omitempty"`
+	LastPrintedUnix int64 `json:"lastPrintedUnix,omitempty"`
 }
 
 type fileRef struct {
@@ -193,7 +197,7 @@ func summary(m app.ModelSummary) modelSummary {
 		tags = []string{}
 	}
 	return modelSummary{m.ID, m.Creator, m.Release, m.Category, m.Name, m.Dir, m.Variants, m.Parts, m.Bytes, m.Cover,
-		m.Cover != 0 || m.Renderable, m.DisplayName, tags, m.Prints, m.Hidden}
+		m.Cover != 0 || m.Renderable, m.DisplayName, tags, m.Prints, m.Hidden, m.FirstSeen, m.LastPrinted}
 }
 
 func refs(fs []app.FileRef) []fileRef {
@@ -225,7 +229,9 @@ func (a *API) searchModels(w http.ResponseWriter, r *http.Request) {
 	if offset < 0 {
 		offset = 0
 	}
-	query := app.Query{Text: q.Get("q"), Creator: q.Get("creator"), Tag: q.Get("tag"), Collection: queryID(q.Get("collection")), Hidden: q.Get("hidden") == "yes",
+	query := app.Query{Text: q.Get("q"), Creator: q.Get("creator"), Tag: q.Get("tag"), Collection: queryID(q.Get("collection")),
+		Scale: q.Get("scale"), Supports: q.Get("supports"), Format: q.Get("format"), Fill: q.Get("fill"),
+		HasPlate: q.Get("plate") == "yes", AddedDays: int(queryID(q.Get("added"))), Sort: sortParam(q.Get("sort")), Hidden: q.Get("hidden") == "yes",
 		Limit: limit, Offset: offset}
 	switch q.Get("printed") {
 	case "yes":
@@ -304,6 +310,26 @@ func (a *API) creators(w http.ResponseWriter, r *http.Request) {
 	out := make([]creator, 0, len(cs))
 	for _, c := range cs {
 		out = append(out, creator{c.Name, c.Models})
+	}
+	writeJSON(w, out)
+}
+
+// facets lists the values of the variant filters with their model counts.
+func (a *API) facets(w http.ResponseWriter, r *http.Request) {
+	fs, err := a.Store.Facets(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	type facet struct {
+		Value  string `json:"value"`
+		Models int    `json:"models"`
+	}
+	out := map[string][]facet{"scale": {}, "supports": {}, "format": {}, "fill": {}}
+	for dim, list := range fs {
+		for _, f := range list {
+			out[dim] = append(out[dim], facet{f.Value, f.Models})
+		}
 	}
 	writeJSON(w, out)
 }
@@ -1370,6 +1396,15 @@ func attachment(name string) string {
 		return r
 	}, name)
 	return `attachment; filename="` + ascii + `"; filename*=UTF-8''` + url.PathEscape(name)
+}
+
+// sortParam lets only the known sort orders through.
+func sortParam(s string) string {
+	switch s {
+	case "added", "printed":
+		return s
+	}
+	return ""
 }
 
 func queryID(s string) int64 {

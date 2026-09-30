@@ -1,9 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { TagPicker } from "./TagPicker";
-import { api, displayName, type Collection, type Creator, type Filters, type ModelSummary, type Tag } from "./api";
+import { api, displayName, emptyFilters, formatDate, type Collection, type Creator, type Facet, type Filters, type ModelSummary, type Tag } from "./api";
 
 const PAGE = 60;
-const empty: Filters = { q: "", creator: "", tag: "", collection: "", printed: "", hidden: "" };
+const empty: Filters = emptyFilters;
 
 function loadFilters(): Filters {
   try {
@@ -28,6 +28,8 @@ export function Library() {
   const [creators, setCreators] = useState<Creator[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
   const [collections, setCollections] = useState<Collection[]>([]);
+  const [facets, setFacets] = useState<Record<"scale" | "supports" | "format" | "fill", Facet[]> | null>(null);
+  const [more, setMore] = useState(false); // the extra filters are open
   const [models, setModels] = useState<ModelSummary[]>([]);
   const [total, setTotal] = useState(0);
   const scroll = useRef(0); // where the page is scrolled, kept up to date for the moment we leave
@@ -50,6 +52,7 @@ export function Library() {
     setF((prev) => ({ ...prev, ...patch }));
     setPage(0);
   };
+  const filtersInUse = [f.scale, f.supports, f.format, f.fill, f.plate, f.added].filter(Boolean).length;
   const pages = Math.max(1, Math.ceil(total / PAGE));
   const goto = (n: number) => {
     setPage(Math.min(Math.max(n, 0), pages - 1));
@@ -60,6 +63,7 @@ export function Library() {
     api.creators().then(setCreators, (e) => setError(String(e)));
     api.tags().then(setTags, () => {});
     api.collections().then(setCollections, () => {});
+    api.facets().then(setFacets, () => {});
   }, []);
 
   const load = () =>
@@ -214,6 +218,14 @@ export function Library() {
           <option value="yes">Printed</option>
           <option value="no">Never printed</option>
         </select>
+        <select value={f.sort} onChange={(e) => set({ sort: e.target.value as Filters["sort"] })} aria-label="Sort">
+          <option value="">Sort: name / relevance</option>
+          <option value="added">Sort: newest first</option>
+          <option value="printed">Sort: last printed</option>
+        </select>
+        <button className={`chip${more || filtersInUse ? " active" : ""}`} onClick={() => setMore(!more)}>
+          Filters{filtersInUse ? ` (${filtersInUse})` : ""}
+        </button>
         <button className={`chip${selecting ? " active" : ""}`} onClick={() => (selecting ? stopSelecting() : setSelecting(true))}>
           {selecting ? "Done selecting" : "Select models"}
         </button>
@@ -222,6 +234,33 @@ export function Library() {
           show hidden
         </label>
       </div>
+      {(more || filtersInUse > 0) && (
+        <div className="toolbar filters">
+          {(["scale", "supports", "format", "fill"] as const).map((dim) => (
+            <select key={dim} value={f[dim]} onChange={(e) => set({ [dim]: e.target.value } as Partial<Filters>)} aria-label={dim}>
+              <option value="">Any {dim}</option>
+              {(facets?.[dim] ?? []).map((x) => (
+                <option key={x.value} value={x.value}>
+                  {x.value} ({x.models})
+                </option>
+              ))}
+            </select>
+          ))}
+          <label className="check">
+            <input type="checkbox" checked={f.plate === "yes"} onChange={(e) => set({ plate: e.target.checked ? "yes" : "" })} />
+            has a sliced file
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={f.added === "14"} onChange={(e) => set({ added: e.target.checked ? "14" : "" })} />
+            new (last 14 days)
+          </label>
+          {filtersInUse > 0 && (
+            <button className="link" onClick={() => set({ scale: "", supports: "", format: "", fill: "", plate: "", added: "" })}>
+              clear
+            </button>
+          )}
+        </div>
+      )}
       {error && <p className="error">{error}</p>}
       <div className="resultbar">
         <span className="muted">
@@ -295,6 +334,7 @@ export function Library() {
               {selecting && <span className={`tick${picked.has(m.id) ? " on" : ""}`}>{picked.has(m.id) ? "✓" : ""}</span>}
               {m.preview ? <img src={api.previewURL(m.id)} alt="" loading="lazy" /> : <span>no preview</span>}
               {m.prints > 0 && <span className="badge">printed{m.prints > 1 ? ` ×${m.prints}` : ""}</span>}
+              {m.addedUnix && Date.now() / 1000 - m.addedUnix < 14 * 86400 && <span className="badge new">new</span>}
             </div>
             <div className="title">{displayName(m)}</div>
             <div className="sub">
@@ -303,6 +343,7 @@ export function Library() {
             </div>
             <div className="sub">
               {m.variants} variant{m.variants === 1 ? "" : "s"}
+              {m.lastPrintedUnix ? ` · printed ${formatDate(m.lastPrintedUnix)}` : ""}
             </div>
             {m.tags.length > 0 && (
               <div className="tags">

@@ -1105,3 +1105,89 @@ func TestSliceMetaAndPreviewOfUploadedAndLibraryPlates(t *testing.T) {
 		t.Errorf("unknown upload: %d", resp.StatusCode)
 	}
 }
+
+func TestFindingThings(t *testing.T) {
+	srv := server(t)
+	names := func(query string) string {
+		t.Helper()
+		var ms []modelSummary
+		getJSON(t, srv, "/api/models?"+query, &ms)
+		var out []string
+		for _, m := range ms {
+			out = append(out, m.Name)
+		}
+		return strings.Join(out, ",")
+	}
+	// Variant filters: a model has a variant with this value.
+	for q, want := range map[string]string{
+		"scale=32mm":           "Bell Head",
+		"scale=75mm":           "",
+		"supports=No+Supports": "Bell Head",
+		"format=Lychee":        "Bell Head",
+		"fill=Hollow":          "",
+		"scale=32mm&format=Lychee&supports=Supported": "Bell Head",
+		"scale=32mm&supports=Supported&format=STL":    "",
+	} {
+		if got := names(q); got != want {
+			t.Errorf("%s: %q, want %q", q, got, want)
+		}
+	}
+	// New: everything was seen just now; sorting by added works and bad sorts are ignored.
+	if got := names("added=7"); !strings.Contains(got, "Bell Head") || !strings.Contains(got, "Kövön") {
+		t.Errorf("added: %q", got)
+	}
+	if names("sort=added") == "" || names("sort=bogus") == "" {
+		t.Error("sorting must keep the results")
+	}
+	var all []modelSummary
+	getJSON(t, srv, "/api/models", &all)
+	for _, m := range all {
+		if m.AddedUnix == 0 || m.LastPrintedUnix != 0 {
+			t.Errorf("%s: added %d, last printed %d", m.Name, m.AddedUnix, m.LastPrintedUnix)
+		}
+	}
+	// "Has a sliced file": none yet; an uploaded plate that holds a part of Bell Head makes it one.
+	if got := names("plate=yes"); got != "" {
+		t.Errorf("no plates yet: %q", got)
+	}
+	var bell modelDetail
+	var hits []modelSummary
+	getJSON(t, srv, "/api/models?q=bell", &hits)
+	getJSON(t, srv, "/api/models/"+itoa(hits[0].ID), &bell)
+	var stl int64
+	for _, v := range bell.Variants {
+		for _, p := range v.Parts {
+			if p.Name == "bell.stl" {
+				stl = p.ID
+			}
+		}
+	}
+	code, u := upload(t, srv, "bell plate.ctb", plainCTB())
+	if code != 200 {
+		t.Fatal(code)
+	}
+	uid := fmt.Sprint(u["id"])
+	send(t, srv, "PUT", "/api/plates/"+uid+"/contents", `{"items":[{"partId":`+itoa(stl)+`,"count":1}]}`)
+	if got := names("plate=yes"); got != "Bell Head" {
+		t.Errorf("plate=yes: %q", got)
+	}
+	// Last printed: a printed print with a part of Bell Head, then sort by it.
+	_, body := send(t, srv, "POST", "/api/jobs", `{"name":"x"}`)
+	var created struct{ ID int64 }
+	json.Unmarshal([]byte(body), &created)
+	send(t, srv, "PUT", "/api/jobs/"+itoa(created.ID)+"/items", `{"items":[{"partId":`+itoa(stl)+`,"count":1}]}`)
+	send(t, srv, "PUT", "/api/jobs/"+itoa(created.ID), `{"name":"x","state":"printed"}`)
+	getJSON(t, srv, "/api/models?sort=printed", &all)
+	if all[0].Name != "Bell Head" || all[0].LastPrintedUnix == 0 || all[1].LastPrintedUnix != 0 {
+		t.Errorf("sort=printed: %+v", all)
+	}
+	// Facets with counts.
+	var f map[string][]struct {
+		Value  string
+		Models int
+	}
+	getJSON(t, srv, "/api/facets", &f)
+	if len(f["scale"]) == 0 || f["scale"][0].Value != "32mm" || f["scale"][0].Models != 1 || len(f["format"]) == 0 {
+		t.Errorf("facets: %+v", f)
+	}
+}
