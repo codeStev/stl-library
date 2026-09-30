@@ -2,6 +2,7 @@ import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Library } from "./Library";
 import { Collections } from "./Collections";
+import { Prints } from "./Prints";
 import { ModelPage } from "./ModelPage";
 import { Issues } from "./Issues";
 import { Queue } from "./Queue";
@@ -38,6 +39,7 @@ function App({ me, signOut }: { me: Me; signOut: () => void }) {
         <nav>
           <a href="#/">Library</a>
           <a href="#/collections">Collections</a>
+          <a href="#/prints">Prints</a>
           <a href="#/queue">Print queue</a>
           <a href="#/printer">Printer</a>
           <a href="#/imports">Imports</a>
@@ -56,6 +58,8 @@ function App({ me, signOut }: { me: Me; signOut: () => void }) {
           <ModelPage id={Number(model[1])} />
         ) : route.startsWith("#/issues") ? (
           <Issues />
+        ) : route.startsWith("#/prints") || route.startsWith("#/print/") ? (
+          <Prints id={Number(route.match(/^#\/print\/(\d+)/)?.[1]) || null} />
         ) : route.startsWith("#/collections") ? (
           <Collections />
         ) : route.startsWith("#/queue") ? (

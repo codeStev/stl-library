@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { api, DIM_VALUES, displayName, formatBytes, formatDate, isSliced, printable, showLibrary, type DimKey, type FileRef, type Collection, type ModelDetail, type PartLink, type Tag, type Variant } from "./api";
 import { SliceEditor } from "./SliceEditor";
+import { AddToPrint } from "./AddToPrint";
 import { TagPicker } from "./TagPicker";
 
 // three.js is large; it loads only when a 3D view is opened.
@@ -201,11 +202,17 @@ export function ModelPage({ id }: { id: number }) {
                   ))}
                 </ul>
               )}
+              <PrintProgress variant={sel} />
+              <div className="actions">
+                <AddToPrint parts={sel.parts.filter((p) => !isSliced(p.name)).map((p) => ({ id: p.id, count: 1 }))} label="Add all parts to a print" />
+              </div>
               <ul className="parts">
                 {sel.parts.map((p) => (
                   <li key={p.id} className={editing === p.id ? "open" : ""}>
                     <a href={api.partURL(p.id)}>{p.name}</a>
                     <span>
+                      {sel.printedParts?.[p.id] > 0 && <span className="inplates printed">printed ×{sel.printedParts[p.id]}</span>}
+                      {!isSliced(p.name) && <AddToPrint parts={[{ id: p.id, count: 1 }]} label="+ print" compact />}
                       {links[p.id] && (
                         <span
                           className="inplates"
@@ -229,7 +236,9 @@ export function ModelPage({ id }: { id: number }) {
                     </span>
                     {editing === p.id && (
                       <SliceEditor
-                        part={p}
+                        title={p.name}
+                        load={() => api.sliceContents(p.id)}
+                        save={(items) => api.setSliceContents(p.id, items)}
                         model={m}
                         onSaved={() => {
                           setLinkTick((n) => n + 1);
@@ -350,6 +359,21 @@ function CollectionEditor({ m, act }: { m: ModelDetail; act: Act }) {
         placeholder="add to a collection…"
         noun="collection"
       />
+    </div>
+  );
+}
+
+// How many of the variant's parts were printed (in printed prints or by "Mark printed").
+function PrintProgress({ variant }: { variant: Variant }) {
+  const parts = variant.parts.filter((p) => !isSliced(p.name));
+  const done = parts.filter((p) => (variant.printedParts?.[p.id] ?? 0) > 0).length;
+  if (parts.length === 0 || done === 0) return null;
+  return (
+    <div className="print-progress" title={`${done} of ${parts.length} parts printed`}>
+      <progress value={done} max={parts.length} />
+      <span>
+        printed {done} of {parts.length} parts
+      </span>
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { api, displayName, isSliced, type FileRef, type ModelDetail, type ModelSummary, type PartLink } from "./api";
+import { displayName, isSliced, type FileRef, type ModelDetail, type PartLink } from "./api";
+import { PartPicker } from "./PartPicker";
 
 interface Row {
   partId?: number; // unknown for a link whose file is gone from the library
@@ -10,47 +11,52 @@ interface Row {
   missing?: boolean;
 }
 
-// SliceEditor says what a sliced file (a plate) contains: which part files,
-// how many copies of each. Parts are picked from this model or from another
-// model, so a plate of many miniatures can be described too.
-export function SliceEditor({ part, model, onSaved, onCancel }: { part: FileRef; model: ModelDetail; onSaved: () => void; onCancel: () => void }) {
+// SliceEditor says what a sliced file (a plate) contains: which part files, how many
+// copies of each. Parts come from the model being viewed (if any) or from any other
+// model, so a plate of many miniatures can be described too. It works for library
+// plates and uploaded plates alike: the caller says how to load and save.
+export function SliceEditor({
+  title,
+  load,
+  save,
+  model,
+  onSaved,
+  onCancel,
+}: {
+  title: string;
+  load: () => Promise<{ contents: PartLink[]; usedIn?: PartLink[] }>;
+  save: (items: { partId: number; count: number }[]) => Promise<unknown>;
+  model?: ModelDetail;
+  onSaved: () => void;
+  onCancel: () => void;
+}) {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [usedIn, setUsedIn] = useState<PartLink[]>([]);
   const [error, setError] = useState("");
-  const [other, setOther] = useState<ModelDetail | null>(null);
 
   useEffect(() => {
-    api.sliceContents(part.id).then(
+    load().then(
       (r) => {
         setRows(r.contents.map((c) => ({ partId: c.partId, path: c.path, name: c.name, modelName: c.modelName, count: c.count, missing: c.missing })));
-        setUsedIn(r.usedIn);
+        setUsedIn(r.usedIn ?? []);
       },
       (e) => setError(String(e)),
     );
-  }, [part.id]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (!rows) return <div className="slice-editor">{error || "Loading…"}</div>;
 
   const has = (id: number) => rows.some((r) => r.partId === id);
-  const add = (p: FileRef, from: ModelDetail) => {
-    if (has(p.id)) return;
-    setRows([...rows, { partId: p.id, path: p.name, name: p.name, modelName: displayName(from), count: 1 }]);
-  };
   const setCount = (i: number, count: number) => setRows(rows.map((r, k) => (k === i ? { ...r, count: Math.max(1, Math.min(10000, count || 1)) } : r)));
-  const save = () =>
-    api
-      .setSliceContents(
-        part.id,
-        rows.filter((r) => r.partId).map((r) => ({ partId: r.partId as number, count: r.count })),
-      )
-      .then(onSaved, (e) => setError(String(e)));
-
-  // This model's files that can go into a plate: models and projects, not the plate itself.
-  const own = model.variants.flatMap((v) => v.parts.map((p) => ({ p, v }))).filter(({ p }) => p.id !== part.id);
+  const doSave = () =>
+    save(rows.filter((r) => r.partId).map((r) => ({ partId: r.partId as number, count: r.count }))).then(onSaved, (e) => setError(String(e)));
+  const own = model ? model.variants.flatMap((v) => v.parts.map((p) => ({ p, v }))).filter(({ p }) => !isSliced(p.name) && !has(p.id)) : [];
+  const addFile = (p: FileRef, from: string, count = 1) => setRows((rs) => (rs ?? []).some((r) => r.partId === p.id) ? rs : [...(rs ?? []), { partId: p.id, path: p.name, name: p.name, modelName: from, count }]);
 
   return (
     <div className="slice-editor">
-      <strong>{part.name} contains</strong>
+      <strong>{title} contains</strong>
       {rows.length === 0 && <p className="muted">Nothing linked yet.</p>}
       <ul>
         {rows.map((r, i) => (
@@ -66,102 +72,37 @@ export function SliceEditor({ part, model, onSaved, onCancel }: { part: FileRef;
           </li>
         ))}
       </ul>
-      <div className="slice-add">
-        <select
-          value=""
-          onChange={(e) => {
-            const hit = own.find(({ p }) => String(p.id) === e.target.value);
-            if (hit) add(hit.p, model);
-          }}
-        >
-          <option value="">add a part of this model…</option>
-          {own
-            .filter(({ p }) => !has(p.id))
-            .map(({ p, v }) => (
+      {model && own.length > 0 && (
+        <div className="slice-add">
+          <select
+            value=""
+            onChange={(e) => {
+              const hit = own.find(({ p }) => String(p.id) === e.target.value);
+              if (hit) addFile(hit.p, displayName(model));
+            }}
+          >
+            <option value="">add a part of this model…</option>
+            {own.map(({ p, v }) => (
               <option key={p.id} value={p.id}>
                 {p.name} — {v.label || "files"}
               </option>
             ))}
-        </select>
-        <OtherModelPicker current={model.id} onModel={setOther} />
-      </div>
-      {other && (
-        <div className="slice-add">
-          <span className="muted">{displayName(other)}:</span>
-          <select
-            value=""
-            onChange={(e) => {
-              const hit = other.variants.flatMap((v) => v.parts).find((p) => String(p.id) === e.target.value);
-              if (hit) add(hit, other);
-            }}
-          >
-            <option value="">add a part…</option>
-            {other.variants.flatMap((v) =>
-              v.parts
-                .filter((p) => !has(p.id) && !isSliced(p.name))
-                .map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} — {v.label || "files"}
-                  </option>
-                )),
-            )}
           </select>
-          <button className="link" onClick={() => setOther(null)}>
-            close
-          </button>
         </div>
       )}
-      {usedIn.length > 0 && (
-        <p className="muted">
-          This file is itself in: {usedIn.map((u) => `${u.name} ×${u.count}`).join(", ")}
-        </p>
-      )}
+      <PartPicker
+        exclude={isSliced}
+        skip={rows.map((r) => r.partId ?? 0)}
+        onAdd={(ps) => ps.forEach((p) => addFile({ id: p.id, name: p.name, size: 0 }, p.modelName, p.count))}
+      />
+      {usedIn.length > 0 && <p className="muted">This file is itself in: {usedIn.map((u) => `${u.name} ×${u.count}`).join(", ")}</p>}
       {error && <p className="error">{error}</p>}
       <div className="actions">
-        <button onClick={save}>Save</button>
+        <button onClick={doSave}>Save</button>
         <button className="link" onClick={onCancel}>
           Cancel
         </button>
       </div>
     </div>
-  );
-}
-
-// OtherModelPicker searches the library for a model whose parts can go into
-// the plate, too (a plate of miniatures from several models).
-function OtherModelPicker({ current, onModel }: { current: number; onModel: (m: ModelDetail) => void }) {
-  const [q, setQ] = useState("");
-  const [hits, setHits] = useState<ModelSummary[]>([]);
-  useEffect(() => {
-    if (q.trim().length < 2) {
-      setHits([]);
-      return;
-    }
-    const t = setTimeout(() => {
-      api.models({ q, creator: "", tag: "", collection: "", printed: "", hidden: "" }, 0, 8).then((ms) => setHits(ms.filter((m) => m.id !== current)), () => setHits([]));
-    }, 200);
-    return () => clearTimeout(t);
-  }, [q, current]);
-  return (
-    <span className="tag-picker">
-      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="…or search another model" />
-      {hits.length > 0 && (
-        <ul className="tag-options">
-          {hits.map((m) => (
-            <li
-              key={m.id}
-              onMouseDown={(e) => {
-                e.preventDefault();
-                api.model(m.id).then(onModel);
-                setQ("");
-                setHits([]);
-              }}
-            >
-              {displayName(m)} <span className="muted">{m.creator}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </span>
   );
 }

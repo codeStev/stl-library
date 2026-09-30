@@ -56,6 +56,46 @@ export interface Variant {
   prints: Print[];
   queued: boolean;
   relabeled?: boolean;
+  // How many copies of each part (by id) were printed, from printed prints.
+  printedParts: Record<string, number>;
+}
+
+// A "print": a named set of parts (with counts) and plates, possibly from several models.
+export interface JobSummary {
+  id: number;
+  name: string;
+  state: "planned" | "printed";
+  items: number;
+  copies: number;
+  plates: number;
+  createdUnix: number;
+  printedUnix?: number;
+}
+export interface JobItem {
+  partId?: number;
+  path: string;
+  name: string;
+  modelId?: number;
+  modelName?: string;
+  count: number;
+  missing?: boolean;
+}
+export interface JobPlate {
+  partId?: number;
+  uploadId?: string;
+  name: string;
+  size?: number;
+  missing?: boolean;
+}
+export interface Job {
+  id: number;
+  name: string;
+  note: string;
+  state: "planned" | "printed";
+  createdUnix: number;
+  printedUnix?: number;
+  items: JobItem[];
+  plates: JobPlate[];
 }
 
 export interface PrinterJob {
@@ -290,6 +330,16 @@ export const api = {
   deleteCollection: (id: number) => send("DELETE", `/api/collections/${id}`),
   editCollection: (id: number, add: number[], remove: number[]) => send("POST", `/api/collections/${id}/models`, { add, remove }),
   modelCollections: (modelId: number) => get<Collection[]>(`/api/models/${modelId}/collections`),
+  jobs: () => get<JobSummary[]>("/api/jobs"),
+  createJob: (name: string, note = "") => send<{ id: number }>("POST", "/api/jobs", { name, note }),
+  job: (id: number) => get<Job>(`/api/jobs/${id}`),
+  updateJob: (id: number, name: string, note: string, state: string) => send("PUT", `/api/jobs/${id}`, { name, note, state }),
+  deleteJob: (id: number) => send("DELETE", `/api/jobs/${id}`),
+  setJobItems: (id: number, items: { partId: number; count: number }[]) => send("PUT", `/api/jobs/${id}/items`, { items }),
+  setJobPlates: (id: number, plates: { partId?: number; uploadId?: string }[]) => send("PUT", `/api/jobs/${id}/plates`, { plates }),
+  plateURL: (uploadId: string) => `/api/plates/${uploadId}`,
+  uploadContents: (uploadId: string) => get<{ contents: PartLink[] }>(`/api/plates/${uploadId}/contents`),
+  setUploadContents: (uploadId: string, items: { partId: number; count: number }[]) => send("PUT", `/api/plates/${uploadId}/contents`, { items }),
   sliceContents: (partId: number) => get<{ contents: PartLink[]; usedIn: PartLink[] }>(`/api/parts/${partId}/contents`),
   setSliceContents: (partId: number, items: { partId: number; count: number }[]) =>
     send("PUT", `/api/parts/${partId}/contents`, { items }),
@@ -321,4 +371,23 @@ export function showLibrary(f: Partial<Filters>) {
   } catch {
     /* no storage: the library opens unfiltered */
   }
+}
+
+// uploadPlate sends a sliced file (.ctb, .goo, ...) to the app, with progress; it is stored in the
+// app's data, not in the library.
+export function uploadPlate(file: File, onProgress: (done: number, total: number) => void): Promise<{ id: string; name: string; size: number }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/plates");
+    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded, e.total);
+    xhr.onload = () => {
+      if (xhr.status === 401) signedOut();
+      if (xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText));
+      else reject(new Error(`${xhr.status} ${xhr.responseText || "upload failed"}`));
+    };
+    xhr.onerror = () => reject(new Error("upload failed"));
+    const form = new FormData();
+    form.append("file", file);
+    xhr.send(form);
+  });
 }
