@@ -202,10 +202,18 @@ func checkOrder(levels []convention.Dims) string {
 }
 
 // reVariantish matches names that describe a variant in a non-canonical
-// spelling ("Presupported", "32mm_Supported", "LYS", "Unsupported").
-var reVariantish = regexp.MustCompile(`(?i)(^|[\s_\-])(pre-?supported|presupports?|un-?supported|supports?|supported|lys|lychee|chitubox|stl|\d+\s?mm|hollowed?|solid)($|[\s_\-])`)
+// spelling ("Presupported", "32mm_Supported", "LYS", "Unsupported"): these
+// words are a variant wherever they stand in the name.
+var reVariantish = regexp.MustCompile(`(?i)(^|[\s_\-])(pre-?supported|presupports?|un-?supported|supports?|supported|lys|lychee|chitubox|stl|\d+\s?mm)($|[\s_\-])`)
 
-func looksLikeVariant(name string) bool { return reVariantish.MatchString(name) }
+// reFillish matches "Solid" and "Hollow(ed)" as the last word of a name
+// ("Dragon_Solid"). Inside a longer name they are just words of it ("Metal
+// Gear Solid Delta", "Hollow Knight", "Solid Snake").
+var reFillish = regexp.MustCompile(`(?i)(^|[\s_\-])(hollow(?:ed)?|solid)\s*$`)
+
+func looksLikeVariant(name string) bool {
+	return reVariantish.MatchString(name) || reFillish.MatchString(name)
+}
 
 func ext(name string) string {
 	if i := strings.LastIndexByte(name, '.'); i >= 0 {

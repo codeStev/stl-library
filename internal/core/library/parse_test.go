@@ -176,3 +176,23 @@ func TestNormalizeTags(t *testing.T) {
 		t.Error("tag limit not applied")
 	}
 }
+
+func TestSolidAndHollowInsideAModelNameAreWordsOfIt(t *testing.T) {
+	models, issues := Read(files(
+		"Bulkamancer/EVA - Metal Gear Solid Delta Snake Eater/Supported/a.stl",
+		"Bulkamancer/Hollow Knight/Supported/b.stl",
+		"Bulkamancer/Solid Snake/Supported/c.stl",
+		"Bulkamancer/Dragon_Solid/Supported/d.stl",
+		"Bulkamancer/Mask Hollow/Supported/e.stl",
+	))
+	var names []string
+	for _, m := range models {
+		names = append(names, m.Name)
+	}
+	check(t, names, []string{"EVA - Metal Gear Solid Delta Snake Eater", "Hollow Knight", "Solid Snake"})
+	var bad []string
+	for _, i := range issues {
+		bad = append(bad, i.Dir)
+	}
+	check(t, bad, []string{"Bulkamancer/Dragon_Solid/Supported", "Bulkamancer/Mask Hollow/Supported"})
+}
