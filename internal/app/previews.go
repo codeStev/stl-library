@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"image/png"
+	"time"
 )
 
 // PreviewOverrides stores the pictures people chose as the preview of a model
@@ -30,6 +31,10 @@ const maxPreviewBytes = 4 << 20
 type Previews struct {
 	Store     Store
 	Overrides PreviewOverrides
+	// Review (optional) is told about chosen and reset pictures, so the batch review leaves the model alone
+	// (or takes it up again).
+	Review ReviewStore
+	Now    func() time.Time
 }
 
 // Set stores a PNG (16 to 4096 px each way, at most 4 MiB) as the model's preview.
@@ -48,7 +53,17 @@ func (p Previews) Set(ctx context.Context, modelID int64, data []byte) error {
 	if err != nil {
 		return err
 	}
-	return p.Overrides.Put(overrideKey(m.Dir), data)
+	if err := p.Overrides.Put(overrideKey(m.Dir), data); err != nil {
+		return err
+	}
+	if p.Review != nil {
+		at := time.Now()
+		if p.Now != nil {
+			at = p.Now()
+		}
+		return p.Review.MarkReview(ctx, m.Dir, ReviewSet, at.Unix())
+	}
+	return nil
 }
 
 // Reset goes back to the model's own image or render.
@@ -60,7 +75,13 @@ func (p Previews) Reset(ctx context.Context, modelID int64) error {
 	if p.Overrides == nil {
 		return nil
 	}
-	return p.Overrides.Delete(overrideKey(m.Dir))
+	if err := p.Overrides.Delete(overrideKey(m.Dir)); err != nil {
+		return err
+	}
+	if p.Review != nil {
+		return p.Review.UnmarkReview(ctx, m.Dir)
+	}
+	return nil
 }
 
 // Version is when a model's chosen preview was made (0: it has none). It

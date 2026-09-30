@@ -60,10 +60,12 @@ export interface ViewerProps {
   onSetPreview?: (png: Blob) => Promise<unknown>;
   // A view inside the page (not a full-screen dialog); it keeps rendering only while something changes.
   inline?: boolean;
+  // With onSetPreview: the Enter key does the same as the button (for going through many models).
+  hotkey?: boolean;
 }
 
 // A 3D view of one part file. This module (and three.js) is loaded only when a viewer is opened.
-export default function Viewer({ url, name, size, onClose, onSetPreview, inline = false }: ViewerProps) {
+export default function Viewer({ url, name, size, onClose, onSetPreview, inline = false, hotkey = false }: ViewerProps) {
   const mount = useRef<HTMLDivElement>(null);
   const capture = useRef<() => Promise<Blob | null>>(async () => null);
   const [status, setStatus] = useState(`Loading ${formatBytes(size)}…`);
@@ -195,12 +197,27 @@ export default function Viewer({ url, name, size, onClose, onSetPreview, inline 
     }
   };
 
+  const latestSet = useRef(setPreview);
+  latestSet.current = setPreview;
+  const ready = !status;
+  useEffect(() => {
+    if (!hotkey || !onSetPreview || !ready) return;
+    const on = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (e.key !== "Enter" || e.repeat || e.ctrlKey || e.metaKey || e.altKey || (t && /^(INPUT|TEXTAREA|SELECT|BUTTON|A)$/.test(t.tagName))) return;
+      e.preventDefault();
+      void latestSet.current();
+    };
+    addEventListener("keydown", on);
+    return () => removeEventListener("keydown", on);
+  }, [hotkey, onSetPreview, ready]);
+
   const bar = (
     <div className="viewer-bar">
       <span>{name}</span>
       {onSetPreview && !status && (
         <button onClick={setPreview} title="Turn the model to the view you like, then click">
-          Use this view as the preview
+          Use this view as the preview{hotkey ? " (Enter)" : ""}
         </button>
       )}
       {saved && <span className="muted">{saved}</span>}

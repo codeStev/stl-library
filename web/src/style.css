@@ -375,3 +375,16 @@ table.roster select { font: inherit; background: var(--panel); color: var(--text
 .bulkrows li { padding: 4px 0; border-bottom: 1px solid var(--line); }
 .bulkrows li.problem { opacity: 0.7; }
 .bulkrows code { word-break: break-all; }
+
+/* preview review */
+.review-bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
+.review-bar select { font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); }
+.review-bar progress { width: 180px; }
+.review-title { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; margin: 8px 0; font-size: 17px; }
+.review-body { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(0, 2fr); gap: 20px; align-items: start; }
+.review-body h2 { font-size: 14px; color: var(--muted); font-weight: 600; margin: 0 0 6px; }
+.review-current img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); }
+.review-3d select { width: 100%; font: inherit; padding: 6px 10px; margin-bottom: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); }
+.review-3d .viewer.inline { height: min(62vh, 560px); }
+.review-actions { position: sticky; bottom: 0; background: var(--bg); padding: 10px 0; align-items: center; flex-wrap: wrap; }
+@media (max-width: 720px) { .review-body { grid-template-columns: 1fr; } .review-current img { max-height: 220px; } }

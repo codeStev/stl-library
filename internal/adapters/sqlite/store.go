@@ -207,6 +207,10 @@ var migrations = []string{
 		id INTEGER PRIMARY KEY, from_path TEXT NOT NULL, to_path TEXT NOT NULL,
 		at_unix INTEGER NOT NULL, undone INTEGER NOT NULL DEFAULT 0
 	);`,
+
+	// The batch review of preview pictures: which models were looked at ("set": a new picture was chosen,
+	// "skip": the current one is fine), by folder like the rest of the user data.
+	`CREATE TABLE preview_review (dir TEXT PRIMARY KEY, action TEXT NOT NULL, at_unix INTEGER NOT NULL);`,
 }
 
 func migrate(db *sql.DB) error {

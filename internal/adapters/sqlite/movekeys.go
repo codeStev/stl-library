@@ -13,7 +13,7 @@ var pathKeys = []struct{ table, col string }{
 	{"queue", "dir"}, {"queue", "variant_dir"}, {"variant_label", "dir"},
 	{"slice_content", "slice_path"}, {"slice_content", "part_path"},
 	{"collection_model", "dir"}, {"job_item", "part_path"}, {"job_plate", "ref"},
-	{"file_hash", "path"}, {"health_event", "path"},
+	{"file_hash", "path"}, {"health_event", "path"}, {"preview_review", "dir"},
 }
 
 // MoveKeys follows a folder that was moved from -> to: everything below it is renamed in the index and in

@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { Library } from "./Library";
 import { Collections } from "./Collections";
 import { Prints } from "./Prints";
+import { PreviewReview } from "./PreviewReview";
 import { Health } from "./Health";
 import { ModelPage } from "./ModelPage";
 import { Issues } from "./Issues";
@@ -35,6 +36,7 @@ const NAV: { to: string; label: string; title?: string; admin?: boolean; match?:
   { to: "#/queue", label: "Print queue" },
   { to: "#/printer", label: "Printer" },
   { to: "#/imports", label: "Imports" },
+  { to: "#/previews", label: "Previews", title: "Go through the rendered preview pictures and fix them" },
   { to: "#/health", label: "Health", title: "Duplicates, damaged files, storage and leftovers" },
   { to: "#/issues", label: "Issues", title: "Folders that don't follow the folder convention, and suggested fixes" },
   { to: "#/settings", label: "Settings", admin: true },
@@ -89,6 +91,8 @@ function App({ me, signOut }: { me: Me; signOut: () => void }) {
           <Health admin={admin} />
         ) : route.startsWith("#/prints") || route.startsWith("#/print/") ? (
           <Prints id={Number(route.match(/^#\/print\/(\d+)/)?.[1]) || null} />
+        ) : route.startsWith("#/previews") ? (
+          <PreviewReview />
         ) : route.startsWith("#/collections") ? (
           <Collections />
         ) : route.startsWith("#/queue") ? (

@@ -16,6 +16,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	convention "github.com/codeStev/stl-convention"
@@ -38,7 +39,9 @@ type API struct {
 	// Editor renames folders (fix suggestions); nil: suggestions are shown but cannot be applied.
 	Editor app.LibraryEditor
 	// Tidy finds leftovers (junk files, empty folders, identical copies); nil: the feature is off.
-	Tidy *app.Tidy
+	Tidy       *app.Tidy
+	review     *app.PreviewReview
+	reviewOnce sync.Once
 	// Importer is set when importing from a downloads folder is on.
 	Importer *app.Importer
 	// Printing handles the (optional) network printer.
@@ -75,6 +78,10 @@ func (a *API) Handler() http.Handler {
 	h("GET /api/models", full, a.searchModels)
 	h("GET /api/models/{id}", full, a.model)
 	h("GET /api/models/{id}/thumb", full, a.modelThumb)
+	h("GET /api/previews/review", full, a.reviewState)
+	h("POST /api/previews/review/reset", full, a.reviewReset)
+	h("POST /api/previews/review/{id}/skip", full, a.reviewSkip)
+	h("DELETE /api/previews/review/{id}", full, a.reviewUndo)
 	h("PUT /api/models/{id}/preview", full, a.setPreview)
 	h("DELETE /api/models/{id}/preview", full, a.resetPreview)
 	h("GET /api/creators", full, a.creators)
@@ -430,7 +437,20 @@ func (a *API) thumb(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-func (a *API) previews() app.Previews { return app.Previews{Store: a.Store, Overrides: a.Previews} }
+func (a *API) previews() app.Previews {
+	rs, _ := a.Store.(app.ReviewStore)
+	return app.Previews{Store: a.Store, Overrides: a.Previews, Review: rs}
+}
+
+// reviewUC is the batch review of preview pictures (nil when the store cannot keep it).
+func (a *API) reviewUC() *app.PreviewReview {
+	rs, ok := a.Store.(app.ReviewStore)
+	if !ok {
+		return nil
+	}
+	a.reviewOnce.Do(func() { a.review = &app.PreviewReview{Store: a.Store, Reviews: rs, Overrides: a.Previews} })
+	return a.review
+}
 
 // setPreview takes a PNG (the viewer's current view) as the model's preview.
 func (a *API) setPreview(w http.ResponseWriter, r *http.Request) {
@@ -448,6 +468,62 @@ func (a *API) setPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// reviewState is what is left of the batch review: counts and the next models to show.
+func (a *API) reviewState(w http.ResponseWriter, r *http.Request) {
+	rv := a.reviewUC()
+	if rv == nil {
+		http.Error(w, "not available", http.StatusNotImplemented)
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	st, err := rv.State(r.Context(), r.URL.Query().Get("creator"), limit)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"remaining": st.Remaining, "done": st.Done, "next": st.Next})
+}
+
+func (a *API) reviewSkip(w http.ResponseWriter, r *http.Request) {
+	rv := a.reviewUC()
+	id, ok := pathID(w, r)
+	if !ok || rv == nil {
+		return
+	}
+	if err := rv.Skip(r.Context(), id); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) reviewUndo(w http.ResponseWriter, r *http.Request) {
+	rv := a.reviewUC()
+	id, ok := pathID(w, r)
+	if !ok || rv == nil {
+		return
+	}
+	if err := rv.Undo(r.Context(), id); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) reviewReset(w http.ResponseWriter, r *http.Request) {
+	rv := a.reviewUC()
+	if rv == nil {
+		http.Error(w, "not available", http.StatusNotImplemented)
+		return
+	}
+	n, err := rv.Reset(r.Context(), r.URL.Query().Get("creator"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]int{"reset": n})
 }
 
 func (a *API) resetPreview(w http.ResponseWriter, r *http.Request) {

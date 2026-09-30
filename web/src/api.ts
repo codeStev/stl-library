@@ -479,6 +479,11 @@ export const api = {
       if (r.status === 401) signedOut();
       if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
     }),
+  reviewState: (creator: string, limit = 3) =>
+    get<{ remaining: number; done: number; next: number[] }>(`/api/previews/review?${new URLSearchParams({ creator, limit: String(limit) })}`),
+  skipReview: (modelId: number) => send("POST", `/api/previews/review/${modelId}/skip`),
+  undoReview: (modelId: number) => send("DELETE", `/api/previews/review/${modelId}`),
+  resetReview: (creator: string) => send<{ reset: number }>("POST", `/api/previews/review/reset?${new URLSearchParams({ creator })}`),
   resetPreview: (modelId: number) => send("DELETE", `/api/models/${modelId}/preview`),
   partURL: (id: number) => `/api/parts/${id}`,
   zipURL: (variantId: number) => `/api/variants/${variantId}/zip`,
