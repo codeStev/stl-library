@@ -20,6 +20,7 @@ export interface ModelSummary {
   hidden?: boolean;
   addedUnix?: number;
   lastPrintedUnix?: number;
+  previewVersion?: number; // when a chosen preview was made (part of the picture's URL)
 }
 
 export interface FileRef {
@@ -391,7 +392,13 @@ export const api = {
   issues: () => get<Issue[]>("/api/issues"),
   imageURL: (id: number) => `/api/images/${id}`,
   thumbURL: (id: number) => `/api/images/${id}/thumb`,
-  previewURL: (modelId: number) => `/api/models/${modelId}/thumb`,
+  previewURL: (modelId: number, version?: number) => `/api/models/${modelId}/thumb${version ? `?v=${version}` : ""}`,
+  setPreview: (modelId: number, png: Blob) =>
+    fetch(`/api/models/${modelId}/preview`, { method: "PUT", headers: { "Content-Type": "image/png" }, body: png }).then(async (r) => {
+      if (r.status === 401) signedOut();
+      if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+    }),
+  resetPreview: (modelId: number) => send("DELETE", `/api/models/${modelId}/preview`),
   partURL: (id: number) => `/api/parts/${id}`,
   zipURL: (variantId: number) => `/api/variants/${variantId}/zip`,
 };

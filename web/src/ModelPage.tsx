@@ -113,6 +113,14 @@ export function ModelPage({ id }: { id: number }) {
       </div>
       {actionError && <p className="error">{actionError}</p>}
       <NameEditor m={m} act={act} />
+      {(m.previewVersion ?? 0) > 0 && (
+        <p className="muted">
+          A preview picture you chose is shown in the library.{" "}
+          <button className="link" onClick={() => act(api.resetPreview(m.id))}>
+            Reset it
+          </button>
+        </p>
+      )}
       <TagEditor m={m} act={act} />
       <CollectionEditor m={m} act={act} />
       <div className="model-body">
@@ -136,7 +144,7 @@ export function ModelPage({ id }: { id: number }) {
               )}
             </>
           ) : m.preview ? (
-            <img className="main render" src={api.previewURL(m.id)} alt={`${m.name} (rendered)`} />
+            <img className="main render" src={api.previewURL(m.id, m.previewVersion)} alt={`${m.name} (rendered)`} />
           ) : (
             <div className="noimage">no image</div>
           )}
@@ -203,6 +211,7 @@ export function ModelPage({ id }: { id: number }) {
                   ))}
                 </ul>
               )}
+              <LivePreview variant={sel} />
               <PrintProgress variant={sel} />
               <div className="actions">
                 <AddToPrint parts={sel.parts.filter((p) => !isSliced(p.name)).map((p) => ({ id: p.id, count: 1 }))} label="Add all parts to a print" />
@@ -261,7 +270,13 @@ export function ModelPage({ id }: { id: number }) {
       <p className="path">{m.dir}</p>
       {viewing && (
         <Suspense fallback={<div className="viewer viewer-status">Loading viewer…</div>}>
-          <Viewer url={api.partURL(viewing.id)} name={viewing.name} size={viewing.size} onClose={closeViewer} />
+          <Viewer
+            url={api.partURL(viewing.id)}
+            name={viewing.name}
+            size={viewing.size}
+            onClose={closeViewer}
+            onSetPreview={(png) => api.setPreview(m.id, png).then(refresh)}
+          />
         </Suspense>
       )}
     </div>
@@ -361,6 +376,57 @@ function CollectionEditor({ m, act }: { m: ModelDetail; act: Act }) {
         placeholder="add to a collection…"
         noun="collection"
       />
+    </div>
+  );
+}
+
+const viewable3d = (n: string) => /\.(stl|obj|3mf)$/i.test(n);
+
+// An optional 3D view inside the page, for the selected variant. Off by default (it loads the
+// file); the choice is remembered.
+function LivePreview({ variant }: { variant: Variant }) {
+  const [on, setOn] = useState(() => {
+    try {
+      return localStorage.getItem("live3d") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const parts = variant.parts.filter((p) => viewable3d(p.name));
+  const [pick, setPick] = useState<number | null>(null);
+  const part = parts.find((p) => p.id === pick) ?? [...parts].sort((a, b) => b.size - a.size)[0];
+  if (parts.length === 0) return null;
+  return (
+    <div className="live-preview">
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={on}
+          onChange={(e) => {
+            setOn(e.target.checked);
+            try {
+              localStorage.setItem("live3d", e.target.checked ? "1" : "0");
+            } catch {
+              /* no storage: just this time */
+            }
+          }}
+        />
+        Live 3D preview
+      </label>
+      {on && part && (
+        <>
+          <select value={part.id} onChange={(e) => setPick(Number(e.target.value))} aria-label="Part to view">
+            {parts.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name} ({formatBytes(p.size)})
+              </option>
+            ))}
+          </select>
+          <Suspense fallback={<div className="viewer inline viewer-status">Loading viewer…</div>}>
+            <Viewer key={part.id} url={api.partURL(part.id)} name={part.name} size={part.size} inline />
+          </Suspense>
+        </>
+      )}
     </div>
   );
 }

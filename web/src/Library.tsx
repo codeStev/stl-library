@@ -32,7 +32,6 @@ export function Library() {
   const [more, setMore] = useState(false); // the extra filters are open
   const [models, setModels] = useState<ModelSummary[]>([]);
   const [total, setTotal] = useState(0);
-  const scroll = useRef(0); // where the page is scrolled, kept up to date for the moment we leave
   // The scroll position to put back once the page it belongs to has loaded.
   const restore = useRef<{ key: string; y: number } | null>(
     (() => {
@@ -104,13 +103,15 @@ export function Library() {
     }
   }, [models]);
 
-  // Remember the scroll position for coming back.
+  // Remember the scroll position for coming back. It is saved the moment the page is left (the
+  // address changes, before anything is drawn): later the new page has reset the scrolling already.
   useEffect(() => {
-    const on = () => (scroll.current = window.scrollY);
-    addEventListener("scroll", on, { passive: true });
+    const save = () => sessionStorage.setItem("libscroll", JSON.stringify({ key: latestKey.current, y: window.scrollY }));
+    addEventListener("hashchange", save);
+    addEventListener("pagehide", save);
     return () => {
-      removeEventListener("scroll", on);
-      sessionStorage.setItem("libscroll", JSON.stringify({ key: latestKey.current, y: scroll.current }));
+      removeEventListener("hashchange", save);
+      removeEventListener("pagehide", save);
     };
   }, []);
   const latestKey = useRef(key);
@@ -332,7 +333,7 @@ export function Library() {
           >
             <div className="cover">
               {selecting && <span className={`tick${picked.has(m.id) ? " on" : ""}`}>{picked.has(m.id) ? "✓" : ""}</span>}
-              {m.preview ? <img src={api.previewURL(m.id)} alt="" loading="lazy" /> : <span>no preview</span>}
+              {m.preview ? <img src={api.previewURL(m.id, m.previewVersion)} alt="" loading="lazy" /> : <span>no preview</span>}
               {m.prints > 0 && <span className="badge">printed{m.prints > 1 ? ` ×${m.prints}` : ""}</span>}
               {m.addedUnix && Date.now() / 1000 - m.addedUnix < 14 * 86400 && <span className="badge new">new</span>}
             </div>

@@ -293,3 +293,11 @@ table.roster select { font: inherit; background: var(--panel); color: var(--text
 
 .toolbar.filters { margin-top: -6px; }
 .badge.new { left: 6px; right: auto; background: #2d8a4e; color: #fff; }
+
+/* viewer: inline live preview, buttons in the bar */
+.viewer.inline { position: relative; inset: auto; z-index: 0; height: 460px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin: 8px 0 12px; }
+.viewer-bar { gap: 10px; flex-wrap: wrap; }
+.viewer-bar span:first-child { flex: 1; }
+.viewer-bar button:not([aria-label]) { font-size: 13px; padding: 4px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+.live-preview { margin: 8px 0; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.live-preview .viewer { flex-basis: 100%; }
