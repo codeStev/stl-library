@@ -11,6 +11,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -33,6 +34,8 @@ type API struct {
 	Previews app.PreviewOverrides
 	// Health hashes the files in the background (duplicate finder, integrity check).
 	Health *app.Health
+	// Editor renames folders (fix suggestions); nil: suggestions are shown but cannot be applied.
+	Editor app.LibraryEditor
 	// Importer is set when importing from a downloads folder is on.
 	Importer *app.Importer
 	// Printing handles the (optional) network printer.
@@ -92,6 +95,9 @@ func (a *API) Handler() http.Handler {
 	h("GET /api/settings/notifications", admin, a.notificationSettings)
 	h("PUT /api/settings/notifications", admin, a.saveNotificationSettings)
 	h("POST /api/settings/notifications/test", admin, a.testNotifications)
+	h("GET /api/fixes", full, a.fixes)
+	h("POST /api/fixes/apply", admin, a.applyFix)
+	h("POST /api/fixes/{id}/undo", admin, a.undoFix)
 	h("GET /api/health", full, a.health)
 	h("POST /api/health/run", admin, a.healthRun)
 	h("POST /api/health/pause", admin, a.healthPause)
@@ -891,6 +897,89 @@ func (a *API) uploadSliceMeta(w http.ResponseWriter, r *http.Request) {
 func (a *API) uploadSlicePreview(w http.ResponseWriter, r *http.Request) {
 	m, err := a.sliceMeta().OfUpload(r.Context(), r.PathValue("uid"))
 	writeSlicePreview(w, m, err)
+}
+
+func (a *API) fixUC() app.Fixes { return app.Fixes{Store: a.Store, Editor: a.Editor} }
+
+// fixes lists the suggested folder renames and the journal of applied ones.
+func (a *API) fixes(w http.ResponseWriter, r *http.Request) {
+	sug, err := a.fixUC().Suggestions(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	journal, err := a.fixUC().Journal(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	type suggestion struct {
+		From   string `json:"from"`
+		To     string `json:"to"`
+		Issues int    `json:"issues"`
+	}
+	type record struct {
+		ID     int64  `json:"id"`
+		From   string `json:"from"`
+		To     string `json:"to"`
+		AtUnix int64  `json:"atUnix"`
+		Undone bool   `json:"undone,omitempty"`
+	}
+	out := map[string]any{"canApply": a.Editor != nil, "suggestions": []suggestion{}, "journal": []record{}}
+	ss := []suggestion{}
+	for _, s := range sug {
+		ss = append(ss, suggestion{s.From, s.To, s.Issues})
+	}
+	rs := []record{}
+	for _, j := range journal {
+		rs = append(rs, record{j.ID, j.From, j.To, j.AtUnix, j.Undone})
+	}
+	out["suggestions"], out["journal"] = ss, rs
+	writeJSON(w, out)
+}
+
+func (a *API) applyFix(w http.ResponseWriter, r *http.Request) {
+	var body struct{ From, To string }
+	if !readJSON(w, r, &body) {
+		return
+	}
+	id, err := a.fixUC().Apply(r.Context(), body.From, body.To)
+	if err != nil {
+		fixFail(w, err)
+		return
+	}
+	if a.Scan != nil {
+		a.Scan.Request() // the library changed: rescan
+	}
+	writeJSON(w, map[string]int64{"id": id})
+}
+
+func (a *API) undoFix(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	if err := a.fixUC().Undo(r.Context(), id); err != nil {
+		fixFail(w, err)
+		return
+	}
+	if a.Scan != nil {
+		a.Scan.Request()
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// fixFail: a folder that is taken or cannot be written is a conflict the user can read, not a server error.
+func fixFail(w http.ResponseWriter, err error) {
+	if errors.Is(err, fs.ErrPermission) || errors.Is(err, fs.ErrExist) || errors.Is(err, os.ErrExist) || strings.Contains(err.Error(), "file exists") {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		http.Error(w, "the folder is gone", http.StatusConflict)
+		return
+	}
+	fail(w, err)
 }
 
 type healthEventJSON struct {

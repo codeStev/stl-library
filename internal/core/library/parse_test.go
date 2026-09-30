@@ -196,3 +196,53 @@ func TestSolidAndHollowInsideAModelNameAreWordsOfIt(t *testing.T) {
 	}
 	check(t, bad, []string{"Bulkamancer/Dragon_Solid/Supported", "Bulkamancer/Mask Hollow/Supported"})
 }
+
+func TestSuggestedSpellingOfVariantFolders(t *testing.T) {
+	for name, want := range map[string]string{
+		"Presupported":         "Supported",
+		"pre_supported_stl":    "Supported STL",
+		"PreSupported":         "Supported",
+		"Unsupported":          "No Supports",
+		"Non-Supported Files":  "No Supports",
+		"No_Supports_Lychee":   "No Supports Lychee",
+		"LYS":                  "Lychee",
+		"hollow":               "Hollow",
+		"STL files":            "STL",
+		"Pre-Supported Lychee": "Supported Lychee",
+		// not suggested: already canonical, names with other words, more than one level, conflicting words
+		"Supported":             "",
+		"No Supports":           "",
+		"Dragon Solid":          "",
+		"Solid Snake":           "",
+		"Hollow Knight":         "",
+		"32mm_Supported":        "",
+		"Supported Unsupported": "",
+		"lys stl":               "",
+		"":                      "",
+	} {
+		got, ok := suggestSegment(name)
+		if got != want || ok != (want != "") {
+			t.Errorf("suggestSegment(%q) = %q, %v; want %q", name, got, ok, want)
+		}
+	}
+}
+
+func TestSuggestRenamesOneLevelAndCountsTheIssuesItClears(t *testing.T) {
+	fixes := Suggest([]string{
+		"Creator/Rel/Model/Unsupported",
+		"Creator/Rel/Model/Unsupported/Head",
+		"Creator/Rel/Other/Presupported",
+		"Creator/Rel/Dragon Solid/Supported",
+		"Unsupported", // a creator-level folder is never renamed
+	})
+	var got []string
+	for _, f := range fixes {
+		got = append(got, f.From+" -> "+f.To+" x"+strconvI(f.Issues))
+	}
+	check(t, got, []string{
+		"Creator/Rel/Model/Unsupported -> Creator/Rel/Model/No Supports x2",
+		"Creator/Rel/Other/Presupported -> Creator/Rel/Other/Supported x1",
+	})
+}
+
+func strconvI(n int) string { return string(rune('0' + n)) }

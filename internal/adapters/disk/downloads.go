@@ -312,6 +312,32 @@ func (w LibraryWriter) Stat(_ context.Context, rel string) (int64, bool, error) 
 	return info.Size(), true, nil
 }
 
+// Rename renames a folder within its parent folder, and refuses to replace anything. It is the one
+// change the app ever makes to existing library folders (a fix the user confirmed).
+func (w LibraryWriter) Rename(_ context.Context, from, to string) error {
+	src, err := w.full(from)
+	if err != nil {
+		return err
+	}
+	dst, err := w.full(to)
+	if err != nil {
+		return err
+	}
+	if path.Dir(from) != path.Dir(to) || from == to {
+		return ErrOutsideRoot
+	}
+	if info, err := os.Lstat(src); err != nil || !info.IsDir() {
+		if err == nil {
+			err = errors.New("not a folder")
+		}
+		return err
+	}
+	if _, err := os.Lstat(dst); err == nil {
+		return ErrExists
+	}
+	return os.Rename(src, dst)
+}
+
 // Write copies r into a hidden temporary file next to the target and
 // renames it when complete, so a half-written file never appears under
 // its real name (the library listing skips hidden files).

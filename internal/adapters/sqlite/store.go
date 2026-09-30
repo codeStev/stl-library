@@ -201,6 +201,12 @@ var migrations = []string{
 		at_unix INTEGER NOT NULL, dismissed INTEGER NOT NULL DEFAULT 0
 	);
 	CREATE INDEX health_event_path ON health_event(path);`,
+
+	// Folder renames applied from the fix suggestions, so each can be undone.
+	`CREATE TABLE fix_journal (
+		id INTEGER PRIMARY KEY, from_path TEXT NOT NULL, to_path TEXT NOT NULL,
+		at_unix INTEGER NOT NULL, undone INTEGER NOT NULL DEFAULT 0
+	);`,
 }
 
 func migrate(db *sql.DB) error {

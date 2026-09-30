@@ -62,6 +62,12 @@ type Store interface {
 	// PrintedParts says how often each part of a variant was printed (in printed jobs).
 	PrintedParts(ctx context.Context, variantID int64) (map[int64]int, error)
 
+	// Journal of folder renames applied from fix suggestions.
+	AddFix(ctx context.Context, from, to string, atUnix int64) (int64, error)
+	Fixes(ctx context.Context) ([]FixRecord, error)
+	Fix(ctx context.Context, id int64) (*FixRecord, error)
+	MarkFixUndone(ctx context.Context, id int64) error
+
 	// Library health: hashes of the files, duplicates, integrity events.
 	FilesToHash(ctx context.Context, limit int) ([]HashJob, error)
 	FilesToVerify(ctx context.Context, olderThan int64, limit int) ([]HashJob, error)

@@ -329,6 +329,9 @@ export const api = {
     const items = (await r.json()) as ModelSummary[];
     return { items, total: Number(r.headers.get("X-Total-Count") ?? items.length) };
   },
+  fixes: () => get<FixesState>("/api/fixes"),
+  applyFix: (from: string, to: string) => send<{ id: number }>("POST", "/api/fixes/apply", { from, to }),
+  undoFix: (id: number) => send("POST", `/api/fixes/${id}/undo`),
   health: () => get<HealthState>("/api/health"),
   healthRun: () => send("POST", "/api/health/run"),
   healthPause: () => send("POST", "/api/health/pause"),
@@ -474,4 +477,22 @@ export interface DuplicatePage {
   total: number;
   wastedOnPage: number;
   groups: DuplicateGroup[];
+}
+
+export interface FixSuggestion {
+  from: string;
+  to: string;
+  issues: number;
+}
+export interface FixRecord {
+  id: number;
+  from: string;
+  to: string;
+  atUnix: number;
+  undone?: boolean;
+}
+export interface FixesState {
+  canApply: boolean;
+  suggestions: FixSuggestion[];
+  journal: FixRecord[];
 }

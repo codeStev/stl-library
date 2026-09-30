@@ -59,7 +59,7 @@ function App({ me, signOut }: { me: Me; signOut: () => void }) {
         {model ? (
           <ModelPage id={Number(model[1])} />
         ) : route.startsWith("#/issues") ? (
-          <Issues />
+          <Issues admin={admin} />
         ) : route.startsWith("#/health") ? (
           <Health admin={admin} />
         ) : route.startsWith("#/prints") || route.startsWith("#/print/") ? (

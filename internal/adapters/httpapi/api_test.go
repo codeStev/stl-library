@@ -73,7 +73,7 @@ func newServer(t *testing.T) env {
 	previews := disk.PreviewStore{Dir: t.TempDir()}
 	thumbs := app.NewThumbs(store, files, disk.ThumbCache{Dir: t.TempDir()})
 	thumbs.Overrides = previews
-	srv := httptest.NewServer((&API{Store: store, Files: files, Health: health, Thumbs: thumbs, Plates: disk.PlateStore{Dir: t.TempDir()}, Previews: previews, User: app.UserData{Store: store}}).Handler())
+	srv := httptest.NewServer((&API{Store: store, Files: files, Health: health, Editor: disk.LibraryWriter{Root: root}, Thumbs: thumbs, Plates: disk.PlateStore{Dir: t.TempDir()}, Previews: previews, User: app.UserData{Store: store}}).Handler())
 	t.Cleanup(srv.Close)
 	return env{srv, health, store, root}
 }
@@ -1386,5 +1386,99 @@ func TestHealthDuplicatesIntegrityAndMissingFiles(t *testing.T) {
 	}
 	if strings.Join(missing, ",") != "lost.stl" {
 		t.Errorf("only the deleted file is missing (a moved one is not): %v", missing)
+	}
+}
+
+func TestFixSuggestionsApplyAndUndo(t *testing.T) {
+	e := newServer(t)
+	ctx := context.Background()
+	rescan := func() {
+		t.Helper()
+		if _, err := app.Scan(ctx, disk.Lister{Root: e.root}, e.store); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const from = "Lord of the Print/Unchained/Araki/Presupported"
+	const to = "Lord of the Print/Unchained/Araki/Supported"
+	type fixes struct {
+		CanApply    bool
+		Suggestions []struct {
+			From, To string
+			Issues   int
+		}
+		Journal []struct {
+			ID       int64
+			From, To string
+			Undone   bool
+		}
+	}
+	get := func() fixes {
+		var f fixes
+		getJSON(t, e.srv, "/api/fixes", &f)
+		return f
+	}
+	f := get()
+	if !f.CanApply || len(f.Suggestions) != 1 || f.Suggestions[0].From != from || f.Suggestions[0].To != to {
+		t.Fatalf("suggestions: %+v", f)
+	}
+	// Only what is suggested can be applied.
+	for name, body := range map[string]string{
+		"other target": `{"from":"` + from + `","to":"Lord of the Print/Unchained/Araki/Whatever"}`,
+		"not an issue": `{"from":"Loot Studios/Abyssal Haze","to":"Loot Studios/Abyssal Haze 2"}`,
+		"empty":        `{}`,
+	} {
+		if code, _ := send(t, e.srv, "POST", "/api/fixes/apply", body); code != 400 {
+			t.Errorf("%s: %d", name, code)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(e.root, from)); err != nil {
+		t.Fatalf("refused requests change nothing: %v", err)
+	}
+	code, body := send(t, e.srv, "POST", "/api/fixes/apply", `{"from":"`+from+`","to":"`+to+`"}`)
+	var applied struct{ ID int64 }
+	json.Unmarshal([]byte(body), &applied)
+	if code != 200 || applied.ID == 0 {
+		t.Fatalf("apply: %d %s", code, body)
+	}
+	if _, err := os.Stat(filepath.Join(e.root, to)); err != nil {
+		t.Fatalf("renamed on disk: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(e.root, from)); err == nil {
+		t.Error("the old name is gone")
+	}
+	rescan()
+	var models []modelSummary
+	getJSON(t, e.srv, "/api/models?q=araki", &models)
+	if len(models) != 1 {
+		t.Errorf("the model shows up now: %+v", models)
+	}
+	if f := get(); len(f.Suggestions) != 0 || len(f.Journal) != 1 || f.Journal[0].From != from || f.Journal[0].Undone {
+		t.Errorf("after apply: %+v", f)
+	}
+	// Undo: the folder is back, the model gone again; a second undo is refused.
+	if code, _ := send(t, e.srv, "POST", "/api/fixes/"+itoa(applied.ID)+"/undo", ""); code != 204 {
+		t.Fatalf("undo: %d", code)
+	}
+	if _, err := os.Stat(filepath.Join(e.root, from)); err != nil {
+		t.Errorf("back under its old name: %v", err)
+	}
+	rescan()
+	if f := get(); len(f.Suggestions) != 1 || !f.Journal[0].Undone {
+		t.Errorf("after undo: %+v", f)
+	}
+	if code, _ := send(t, e.srv, "POST", "/api/fixes/"+itoa(applied.ID)+"/undo", ""); code != 400 {
+		t.Errorf("second undo: %d", code)
+	}
+	// A taken target is not offered (and never replaced).
+	os.MkdirAll(filepath.Join(e.root, to), 0o755)
+	if f := get(); len(f.Suggestions) != 0 {
+		t.Errorf("the target exists: %+v", f.Suggestions)
+	}
+	if code, _ := send(t, e.srv, "POST", "/api/fixes/apply", `{"from":"`+from+`","to":"`+to+`"}`); code != 400 {
+		t.Errorf("applying onto a taken name: %d", code)
+	}
+	// The folder is gone (renamed by hand) when undoing an old fix: a conflict, not a crash.
+	if code, _ := send(t, e.srv, "POST", "/api/fixes/99999/undo", ""); code != 404 {
+		t.Errorf("unknown fix: %d", code)
 	}
 }
