@@ -58,6 +58,8 @@ function App({ me, signOut }: { me: Me; signOut: () => void }) {
   const model = route.match(/^#\/model\/(\d+)/);
   useEffect(() => {
     if (!model) document.title = titleFor(route); // a model page sets its own
+    // on a phone the navigation scrolls: keep the current entry in view
+    document.querySelector('header nav a[aria-current="page"]')?.scrollIntoView({ block: "nearest", inline: "center" });
   }, [route, model]);
   return (
     <>

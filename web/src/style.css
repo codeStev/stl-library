@@ -24,7 +24,7 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 a { color: inherit; }
 header {
   display: flex; align-items: center; gap: 24px; padding: 12px 20px;
-  background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 1;
+  background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 10;
 }
 header .brand { font-weight: 700; text-decoration: none; white-space: nowrap; }
 header nav { display: flex; flex-wrap: wrap; gap: 4px 16px; }
@@ -310,7 +310,9 @@ table.roster select { font: inherit; background: var(--panel); color: var(--text
 /* small screens: a phone at the workbench */
 @media (max-width: 720px) {
   header { flex-wrap: wrap; gap: 6px 14px; padding: 8px 12px; }
-  header nav { order: 3; width: 100%; overflow-x: auto; white-space: nowrap; gap: 16px; padding-bottom: 4px; -webkit-overflow-scrolling: touch; }
+  header nav { order: 3; width: 100%; flex-wrap: nowrap; overflow-x: auto; white-space: nowrap; gap: 18px; padding-bottom: 2px; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  header nav::-webkit-scrollbar { display: none; }
+  header nav a { padding: 8px 0; flex: none; }
   header .me { margin-left: auto; max-width: 50vw; overflow: hidden; text-overflow: ellipsis; }
   main { padding: 12px; }
   .toolbar { gap: 8px; }
@@ -323,7 +325,11 @@ table.roster select { font: inherit; background: var(--panel); color: var(--text
   .pager { gap: 6px; }
   .pager .chip { min-width: 40px; justify-content: center; }
   .resultbar { flex-direction: column; align-items: stretch; }
-  .bulkbar { gap: 8px; }
+  .bulkbar { gap: 6px; flex-direction: column; align-items: stretch; }
+  .bulkbar > span:not(.note) { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  .bulkbar > strong { font-size: 15px; }
+  .bulkbar > button.link { text-align: left; padding: 6px 0; }
+  .bulkmove .fields { grid-template-columns: 1fr; }
   .bulkbar .tag-picker input, .tag-picker input { width: 100%; min-width: 150px; }
   .tag-options { max-width: calc(100vw - 32px); }
   .parts li, .job-items li { flex-wrap: wrap; row-gap: 6px; }
@@ -355,7 +361,7 @@ table.roster select { font: inherit; background: var(--panel); color: var(--text
 @media (max-width: 720px) { .storage-cols { grid-template-columns: 1fr; } }
 .bars, .releases { list-style: none; padding: 0; margin: 0; }
 .bars > li { border-bottom: 1px solid var(--line); }
-.bars summary { position: relative; display: flex; gap: 10px; justify-content: space-between; padding: 5px 4px; cursor: pointer; overflow: hidden; }
+.bars summary { position: relative; isolation: isolate; display: flex; gap: 10px; justify-content: space-between; padding: 5px 4px; cursor: pointer; overflow: hidden; }
 .bars .bar { position: absolute; left: 0; top: 0; bottom: 0; background: var(--line); opacity: 0.5; z-index: 0; }
 .bars .label, .bars .muted { position: relative; z-index: 1; }
 .releases { padding: 2px 0 6px 18px; font-size: 13px; }
