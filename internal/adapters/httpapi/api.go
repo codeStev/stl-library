@@ -3,6 +3,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -36,6 +37,8 @@ type API struct {
 	Health *app.Health
 	// Editor renames folders (fix suggestions); nil: suggestions are shown but cannot be applied.
 	Editor app.LibraryEditor
+	// Tidy finds leftovers (junk files, empty folders, identical copies); nil: the feature is off.
+	Tidy *app.Tidy
 	// Importer is set when importing from a downloads folder is on.
 	Importer *app.Importer
 	// Printing handles the (optional) network printer.
@@ -103,6 +106,9 @@ func (a *API) Handler() http.Handler {
 	h("POST /api/health/pause", admin, a.healthPause)
 	h("POST /api/health/events/{id}/dismiss", admin, a.dismissHealthEvent)
 	h("GET /api/duplicates", full, a.duplicates)
+	h("GET /api/tidy", full, a.tidy)
+	h("POST /api/tidy/run", admin, a.tidyRun)
+	h("POST /api/tidy/apply", admin, a.tidyApply)
 	h("GET /api/library/scan", full, a.scanState)
 	h("POST /api/library/scan", admin, a.requestScan)
 	h("GET /api/imports", full, a.imports)
@@ -939,6 +945,66 @@ func (a *API) fixes(w http.ResponseWriter, r *http.Request) {
 	}
 	out["suggestions"], out["journal"] = ss, rs
 	writeJSON(w, out)
+}
+
+func (a *API) tidy(w http.ResponseWriter, r *http.Request) {
+	type item struct {
+		Kind     string `json:"kind"`
+		Path     string `json:"path"`
+		Size     int64  `json:"size,omitempty"`
+		Original string `json:"original,omitempty"`
+	}
+	out := struct {
+		Enabled  bool   `json:"enabled"`
+		Running  bool   `json:"running"`
+		Folders  int    `json:"folders"`
+		Finished int64  `json:"finished"`
+		Error    string `json:"error,omitempty"`
+		Items    []item `json:"items"`
+	}{Enabled: a.Tidy != nil, Items: []item{}}
+	if a.Tidy != nil {
+		st := a.Tidy.State()
+		out.Running, out.Folders, out.Finished, out.Error = st.Running, st.Folders, st.FinishedAt, st.Error
+		for _, it := range st.Items {
+			out.Items = append(out.Items, item{it.Kind, it.Path, it.Size, it.Original})
+		}
+	}
+	writeJSON(w, out)
+}
+
+func (a *API) tidyRun(w http.ResponseWriter, r *http.Request) {
+	if a.Tidy == nil {
+		http.Error(w, "the cleanup is not enabled", http.StatusConflict)
+		return
+	}
+	// the search outlives the request
+	a.Tidy.Start(context.WithoutCancel(r.Context()))
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func (a *API) tidyApply(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Paths []string `json:"paths"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if a.Tidy == nil {
+		http.Error(w, "the cleanup is not enabled", http.StatusConflict)
+		return
+	}
+	res, err := a.Tidy.Apply(r.Context(), body.Paths)
+	if err != nil {
+		fixFail(w, err)
+		return
+	}
+	if res.Done > 0 && a.Scan != nil {
+		a.Scan.Request()
+	}
+	if res.Failed == nil {
+		res.Failed = []string{}
+	}
+	writeJSON(w, map[string]any{"done": res.Done, "failed": res.Failed})
 }
 
 func (a *API) applyFix(w http.ResponseWriter, r *http.Request) {

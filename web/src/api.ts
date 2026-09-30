@@ -208,6 +208,22 @@ export interface ImportRecord {
   updated: number;
 }
 
+export interface TidyItem {
+  kind: "junk-file" | "junk-folder" | "empty-folder" | "copy";
+  path: string;
+  size?: number;
+  original?: string;
+}
+
+export interface TidyState {
+  enabled: boolean;
+  running: boolean;
+  folders: number;
+  finished: number;
+  error?: string;
+  items: TidyItem[];
+}
+
 export interface ImportList {
   enabled: boolean;
   running: boolean;
@@ -386,6 +402,9 @@ export const api = {
   requestScan: () => send("POST", "/api/library/scan"),
   imports: () => get<ImportList>("/api/imports"),
   requestImport: (source: string) => send("POST", "/api/imports/request", { source }),
+  tidy: () => get<TidyState>("/api/tidy"),
+  tidyRun: () => send("POST", "/api/tidy/run"),
+  tidyApply: (paths: string[]) => send<{ done: number; failed: string[] }>("POST", "/api/tidy/apply", { paths }),
   runImport: () => send("POST", "/api/imports/run"),
   retryFailedImports: () => send<{ requested: number }>("POST", "/api/imports/retry-failed"),
   previewImport: (source: string) => get<ImportPreview>(`/api/imports/preview?source=${encodeURIComponent(source)}`),

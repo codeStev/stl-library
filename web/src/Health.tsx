@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, formatBytes, formatDate, type DuplicateGroup, type HealthState } from "./api";
+import { api, formatBytes, formatDate, type DuplicateGroup, type HealthState, type TidyItem, type TidyState } from "./api";
 
 // The health page: how far the background hashing is, files that are in the library twice (same content),
 // files whose content changed on their own, and files that are gone.
@@ -79,6 +79,8 @@ export function Health({ admin }: { admin: boolean }) {
         )}
       </section>
 
+      <Leftovers admin={admin} />
+
       <Duplicates />
     </div>
   );
@@ -137,6 +139,110 @@ function Duplicates() {
         <button className="more" onClick={() => load(groups.length)}>
           Show more
         </button>
+      )}
+    </section>
+  );
+}
+
+const TIDY_TITLES: Record<TidyItem["kind"], string> = {
+  "junk-file": "Junk files (.DS_Store, ._name, Thumbs.db) - deleted",
+  "junk-folder": "Junk folders (__MACOSX) - deleted",
+  "empty-folder": "Empty folders (or with only junk in them) - deleted",
+  copy: "Copies with exactly the content of the original (“name (imported).stl”, “name (2).stl”) - moved to _duplicates",
+};
+
+// Leftovers of unpacking and importing. Finding them reads the whole folder tree, so it only happens on request.
+function Leftovers({ admin }: { admin: boolean }) {
+  const [t, setT] = useState<TidyState | null>(null);
+  const [error, setError] = useState("");
+  const [note, setNote] = useState("");
+  const [off, setOff] = useState<Set<string>>(new Set()); // unchecked paths
+  const load = useCallback(() => api.tidy().then(setT, (e) => setError(String(e))), []);
+  useEffect(() => {
+    load();
+  }, [load]);
+  const running = t?.running ?? false;
+  useEffect(() => {
+    if (!running) return;
+    const i = setInterval(load, 2000);
+    return () => clearInterval(i);
+  }, [running, load]);
+  if (!t || !t.enabled) return null;
+  const chosen = t.items.filter((i) => !off.has(i.path));
+  const count = (k: TidyItem["kind"]) => chosen.filter((i) => i.kind === k).length;
+  const apply = () => {
+    const deleted = count("junk-file") + count("junk-folder") + count("empty-folder");
+    const msg =
+      `Delete ${count("junk-file")} junk file(s), ${count("junk-folder")} junk folder(s) and ${count("empty-folder")} empty folder(s), ` +
+      `and move ${count("copy")} copy file(s) to _duplicates?` +
+      (deleted ? " Deleted junk cannot be brought back." : "");
+    if (!confirm(msg)) return;
+    api.tidyApply(chosen.map((i) => i.path)).then(
+      (r) => {
+        setNote(`${r.done} done${r.failed.length ? `, ${r.failed.length} failed: ${r.failed.slice(0, 3).join("; ")}` : ""}.`);
+        setOff(new Set());
+        load();
+      },
+      (e) => setError(String(e)),
+    );
+  };
+  const kinds = (["junk-file", "junk-folder", "empty-folder", "copy"] as const).filter((k) => t.items.some((i) => i.kind === k));
+  return (
+    <section>
+      <h2>Leftovers</h2>
+      <p className="muted">
+        Junk that archives and imports leave behind, folders with nothing in them, and copies that are byte for byte the same as the file next to them.
+        Nothing happens until you confirm; model files are never deleted.
+      </p>
+      {error && <p className="error">{error}</p>}
+      {note && <p className="muted">{note}</p>}
+      <div className="actions">
+        {admin && (
+          <button disabled={running} onClick={() => api.tidyRun().then(() => setTimeout(load, 500), (e) => setError(String(e)))}>
+            {t.finished ? "Search again" : "Search for leftovers"}
+          </button>
+        )}
+        {running && <span className="progress">Looking… {t.folders.toLocaleString()} folders</span>}
+        {!running && t.finished > 0 && <span className="muted">Searched {formatDate(t.finished)}: {t.items.length} found.</span>}
+      </div>
+      {t.error && <p className="error">{t.error}</p>}
+      {kinds.map((k) => {
+        const list = t.items.filter((i) => i.kind === k);
+        return (
+          <details key={k} open={list.length <= 40}>
+            <summary>
+              {TIDY_TITLES[k]} <span className="count">{list.length}</span>
+            </summary>
+            <ul className="job-items">
+              {list.map((i) => (
+                <li key={i.path}>
+                  {admin && (
+                    <input
+                      type="checkbox"
+                      checked={!off.has(i.path)}
+                      onChange={() =>
+                        setOff((o) => {
+                          const n = new Set(o);
+                          if (!n.delete(i.path)) n.add(i.path);
+                          return n;
+                        })
+                      }
+                      aria-label={`Include ${i.path}`}
+                    />
+                  )}
+                  <span className="name">{i.path}</span>
+                  {i.original && <span className="muted">same as {i.original.split("/").pop()}</span>}
+                  {i.size ? <span className="muted">{formatBytes(i.size)}</span> : null}
+                </li>
+              ))}
+            </ul>
+          </details>
+        );
+      })}
+      {admin && chosen.length > 0 && (
+        <div className="actions">
+          <button onClick={apply}>Clean up {chosen.length} selected</button>
+        </div>
       )}
     </section>
   );
