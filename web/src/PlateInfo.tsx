@@ -17,7 +17,7 @@ export function PlateInfo({ kind, id }: { kind: "part" | "upload"; id: number | 
   const bits = [
     `${meta.layers} layers`,
     `${+meta.layerHeight.toFixed(3)} mm`,
-    meta.printSeconds ? formatDuration(meta.printSeconds) : "",
+    meta.printSeconds ? formatDuration(meta.printSeconds * 1000) : "",
     meta.volumeMl ? `${meta.volumeMl.toFixed(1)} ml` : "",
     meta.exposureS ? `${meta.exposureS} s exposure` : "",
   ].filter(Boolean);

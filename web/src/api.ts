@@ -76,12 +76,6 @@ export interface SliceMeta {
   hasPreview: boolean;
 }
 
-// "3 h 24 min" / "45 min"
-export function formatDuration(seconds: number): string {
-  const m = Math.round(seconds / 60);
-  return m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`;
-}
-
 // A "print": a named set of parts (with counts) and plates, possibly from several models.
 export interface JobSummary {
   id: number;
