@@ -108,8 +108,14 @@ export function PreviewReview() {
     return () => removeEventListener("keydown", on);
   }, [skip, back]);
 
-  const parts = model ? model.variants.flatMap((v) => v.parts.filter((p) => viewable(p.name)).map((p) => ({ p, label: v.label || "files" }))) : [];
-  const part = parts.find(({ p }) => p.id === pick) ?? [...parts].sort((a, b) => Number(/\.stl$/i.test(b.p.name)) - Number(/\.stl$/i.test(a.p.name)) || b.p.size - a.p.size)[0];
+  const parts = model
+    ? model.variants.flatMap((v) => v.parts.filter((p) => viewable(p.name)).map((p) => ({ p, label: v.label || "files", supported: /^supported/i.test(v.dims.supports ?? "") })))
+    : [];
+  // the picture that comes first: the largest file without supports (supports hide the shape), STL before other formats
+  const first = [...parts].sort(
+    (a, b) => Number(a.supported) - Number(b.supported) || Number(/\.stl$/i.test(b.p.name)) - Number(/\.stl$/i.test(a.p.name)) || b.p.size - a.p.size,
+  )[0];
+  const part = parts.find(({ p }) => p.id === pick) ?? first;
   const total = counts.remaining + counts.done;
 
   return (
