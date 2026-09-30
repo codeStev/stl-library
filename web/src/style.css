@@ -346,3 +346,12 @@ table.roster select { font: inherit; background: var(--panel); color: var(--text
 .imports .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
 .imports .preview { flex-basis: 100%; }
 .imports .placements { max-height: 260px; overflow: auto; font-size: 12px; margin: 4px 0; padding-left: 16px; }
+.storage-cols { display: grid; grid-template-columns: 3fr 2fr; gap: 24px; }
+@media (max-width: 720px) { .storage-cols { grid-template-columns: 1fr; } }
+.bars, .releases { list-style: none; padding: 0; margin: 0; }
+.bars > li { border-bottom: 1px solid var(--line); }
+.bars summary { position: relative; display: flex; gap: 10px; justify-content: space-between; padding: 5px 4px; cursor: pointer; overflow: hidden; }
+.bars .bar { position: absolute; left: 0; top: 0; bottom: 0; background: var(--line); opacity: 0.5; z-index: 0; }
+.bars .label, .bars .muted { position: relative; z-index: 1; }
+.releases { padding: 2px 0 6px 18px; font-size: 13px; }
+.releases li { display: flex; justify-content: space-between; gap: 10px; }

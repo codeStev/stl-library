@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Storage } from "./Storage";
 import { api, formatBytes, formatDate, type DuplicateGroup, type HealthState, type TidyItem, type TidyState } from "./api";
 
 // The health page: how far the background hashing is, files that are in the library twice (same content),
@@ -78,6 +79,8 @@ export function Health({ admin }: { admin: boolean }) {
           </ul>
         )}
       </section>
+
+      <Storage />
 
       <Leftovers admin={admin} />
 

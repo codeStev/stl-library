@@ -106,6 +106,7 @@ func (a *API) Handler() http.Handler {
 	h("POST /api/health/pause", admin, a.healthPause)
 	h("POST /api/health/events/{id}/dismiss", admin, a.dismissHealthEvent)
 	h("GET /api/duplicates", full, a.duplicates)
+	h("GET /api/storage", full, a.storage)
 	h("GET /api/tidy", full, a.tidy)
 	h("POST /api/tidy/run", admin, a.tidyRun)
 	h("POST /api/tidy/apply", admin, a.tidyApply)
@@ -944,6 +945,67 @@ func (a *API) fixes(w http.ResponseWriter, r *http.Request) {
 		rs = append(rs, record{j.ID, j.From, j.To, j.AtUnix, j.Undone})
 	}
 	out["suggestions"], out["journal"] = ss, rs
+	writeJSON(w, out)
+}
+
+func (a *API) storage(w http.ResponseWriter, r *http.Request) {
+	rep, ok := a.Store.(app.StorageReporter)
+	if !ok {
+		http.Error(w, "not available", http.StatusNotImplemented)
+		return
+	}
+	st, err := rep.Storage(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	type release struct {
+		Name   string `json:"name"`
+		Models int    `json:"models"`
+		Bytes  int64  `json:"bytes"`
+	}
+	type creator struct {
+		Name     string    `json:"name"`
+		Models   int       `json:"models"`
+		Bytes    int64     `json:"bytes"`
+		Releases []release `json:"releases"`
+	}
+	type model struct {
+		ID      int64  `json:"id"`
+		Name    string `json:"name"`
+		Creator string `json:"creator"`
+		Bytes   int64  `json:"bytes"`
+	}
+	type kind struct {
+		Ext   string `json:"ext"`
+		Files int    `json:"files"`
+		Bytes int64  `json:"bytes"`
+	}
+	out := struct {
+		Bytes           int64     `json:"bytes"`
+		Models          int       `json:"models"`
+		Files           int       `json:"files"`
+		Creators        []creator `json:"creators"`
+		Largest         []model   `json:"largest"`
+		Kinds           []kind    `json:"kinds"`
+		DuplicateBytes  int64     `json:"duplicateBytes"`
+		DuplicateGroups int       `json:"duplicateGroups"`
+		Hashed          int       `json:"hashed"`
+	}{Bytes: st.Bytes, Models: st.Models, Files: st.Files, Creators: []creator{}, Largest: []model{}, Kinds: []kind{},
+		DuplicateBytes: st.DuplicateBytes, DuplicateGroups: st.DuplicateGroups, Hashed: st.Hashed}
+	for _, c := range st.Creators {
+		jc := creator{Name: c.Name, Models: c.Models, Bytes: c.Bytes, Releases: []release{}}
+		for _, rl := range c.Releases {
+			jc.Releases = append(jc.Releases, release{rl.Name, rl.Models, rl.Bytes})
+		}
+		out.Creators = append(out.Creators, jc)
+	}
+	for _, m := range st.Largest {
+		out.Largest = append(out.Largest, model{m.ID, m.Name, m.Creator, m.Bytes})
+	}
+	for _, k := range st.Kinds {
+		out.Kinds = append(out.Kinds, kind{k.Ext, k.Files, k.Bytes})
+	}
 	writeJSON(w, out)
 }
 
