@@ -107,6 +107,9 @@ func (a *API) Handler() http.Handler {
 	h("POST /api/library/scan", admin, a.requestScan)
 	h("GET /api/imports", full, a.imports)
 	h("POST /api/imports/request", admin, a.requestImport)
+	h("POST /api/imports/run", admin, a.runImport)
+	h("POST /api/imports/retry-failed", admin, a.retryFailedImports)
+	h("GET /api/imports/preview", admin, a.previewImport)
 	h("GET /api/jobs", full, a.jobs)
 	h("POST /api/jobs", full, a.createJob)
 	h("GET /api/jobs/{id}", full, a.job)
@@ -1578,9 +1581,15 @@ func (a *API) imports(w http.ResponseWriter, r *http.Request) {
 	}
 	out := struct {
 		Enabled bool     `json:"enabled"`
+		Running bool     `json:"running"`
+		Current string   `json:"current,omitempty"`
+		Since   int64    `json:"since,omitempty"`
+		Done    int      `json:"done"`
 		Records []record `json:"records"`
 	}{Enabled: a.Importer != nil, Records: []record{}}
 	if a.Importer != nil {
+		pr := a.Importer.Progress()
+		out.Running, out.Current, out.Since, out.Done = pr.Running, pr.Current, pr.SinceUnix, pr.DoneUnits
 		recs, err := a.Importer.Log.ImportRecords(r.Context())
 		if err != nil {
 			fail(w, err)
@@ -1589,6 +1598,67 @@ func (a *API) imports(w http.ResponseWriter, r *http.Request) {
 		for _, rec := range recs {
 			out.Records = append(out.Records, record{rec.Source, rec.State, rec.Target, rec.Files, rec.Message, rec.UpdatedUnix})
 		}
+	}
+	writeJSON(w, out)
+}
+
+func (a *API) runImport(w http.ResponseWriter, r *http.Request) {
+	if a.Importer == nil {
+		http.Error(w, "importing is not enabled", http.StatusConflict)
+		return
+	}
+	a.Importer.Trigger()
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func (a *API) retryFailedImports(w http.ResponseWriter, r *http.Request) {
+	if a.Importer == nil {
+		http.Error(w, "importing is not enabled", http.StatusConflict)
+		return
+	}
+	n, err := a.Importer.RetryFailed(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if n > 0 {
+		a.Importer.Trigger()
+	}
+	writeJSON(w, map[string]int{"requested": n})
+}
+
+// previewImport shows where the files of one download folder would go,
+// without writing anything.
+func (a *API) previewImport(w http.ResponseWriter, r *http.Request) {
+	if a.Importer == nil {
+		http.Error(w, "importing is not enabled", http.StatusConflict)
+		return
+	}
+	p, err := a.Importer.PreviewUnit(r.Context(), r.URL.Query().Get("source"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	type placement struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+	}
+	out := struct {
+		Target     string      `json:"target,omitempty"`
+		Settled    bool        `json:"settled"`
+		Why        string      `json:"why,omitempty"`
+		Error      string      `json:"error,omitempty"`
+		Total      int         `json:"total"`
+		Placements []placement `json:"placements"`
+	}{Target: p.Target, Settled: p.Settled, Why: p.Why, Total: len(p.Placements), Placements: []placement{}}
+	if p.Err != nil {
+		out.Error = p.Err.Error()
+	}
+	for i, pl := range p.Placements {
+		if i >= 200 {
+			break
+		}
+		out.Placements = append(out.Placements, placement{pl.File.Rel, pl.Target})
 	}
 	writeJSON(w, out)
 }

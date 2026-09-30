@@ -412,3 +412,44 @@ func TestManyDifferentFilesWithOneNameAreAllKept(t *testing.T) {
 		t.Errorf("known content: %+v %v\n%s", sum, err, lib.list())
 	}
 }
+
+func TestRetryFailedRequeuesOnlyFailedFolders(t *testing.T) {
+	log := &memLog{recs: map[string]ImportRecord{
+		"a/x": {Source: "a/x", State: ImportFailed, Message: "boom", Signature: "s"},
+		"a/y": {Source: "a/y", State: ImportDone},
+	}}
+	im := &Importer{Log: log}
+	n, err := im.RetryFailed(context.Background())
+	if err != nil || n != 1 || log.recs["a/x"].State != ImportQueued || log.recs["a/x"].Signature != "" || log.recs["a/y"].State != ImportDone {
+		t.Errorf("%d %v %+v", n, err, log.recs)
+	}
+}
+
+func TestPreviewUnitShowsPlacementsWithoutWriting(t *testing.T) {
+	dl := &fakeDownloads{files: []importer.File{{Rel: "nomnom/Kida/STL/75mm/k.stl", Size: 1, ModUnix: 1}}}
+	lib := &fakeLibrary{files: map[string]int64{}}
+	im := &Importer{Downloads: dl, Library: lib, Log: &memLog{recs: map[string]ImportRecord{}}, Settle: time.Hour, Now: func() time.Time { return time.Unix(1_000_000, 0) }}
+	p, err := im.PreviewUnit(context.Background(), "nomnom/Kida")
+	if err != nil || len(p.Placements) != 1 || !strings.HasSuffix(p.Placements[0].Target, "Kida/75mm/k.stl") || lib.list() != "" {
+		t.Errorf("%+v %v %q", p, err, lib.list())
+	}
+	if _, err := im.PreviewUnit(context.Background(), "nope"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("%v", err)
+	}
+}
+
+func TestTriggerWakesOnceAndNeverBlocks(t *testing.T) {
+	im := &Importer{}
+	im.Trigger()
+	im.Trigger()
+	select {
+	case <-im.Triggered():
+	default:
+		t.Fatal("no trigger")
+	}
+	select {
+	case <-im.Triggered():
+		t.Fatal("triggered twice")
+	default:
+	}
+}

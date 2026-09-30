@@ -148,6 +148,7 @@ func importLoop(ctx context.Context, im *app.Importer, notes *app.Notifications,
 		case <-ctx.Done():
 			return
 		case <-time.After(every):
+		case <-im.Triggered():
 		}
 	}
 }

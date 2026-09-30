@@ -343,3 +343,6 @@ table.roster select { font: inherit; background: var(--panel); color: var(--text
 
 .issues li.undone code { text-decoration: line-through; opacity: .6; }
 .issues details.fixes { margin-bottom: 12px; }
+.imports .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.imports .preview { flex-basis: 100%; }
+.imports .placements { max-height: 260px; overflow: auto; font-size: 12px; margin: 4px 0; padding-left: 16px; }

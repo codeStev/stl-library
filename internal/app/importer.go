@@ -9,6 +9,7 @@ import (
 	"io"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/codeStev/stl-library/internal/core/importer"
@@ -103,6 +104,68 @@ type Importer struct {
 	// STL" where the importer would write "Supported") counts as there.
 	MergeExisting bool
 	Now           func() time.Time
+
+	mu      sync.Mutex
+	prog    ImportProgress
+	trigger chan struct{}
+	once    sync.Once
+}
+
+// ImportProgress is what a running import is doing right now.
+type ImportProgress struct {
+	Running   bool
+	Current   string // the download folder being imported
+	SinceUnix int64
+	DoneUnits int // folders finished in this run
+}
+
+// Progress reports the current run, if any.
+func (im *Importer) Progress() ImportProgress {
+	im.mu.Lock()
+	defer im.mu.Unlock()
+	return im.prog
+}
+
+func (im *Importer) setProgress(f func(*ImportProgress)) {
+	im.mu.Lock()
+	defer im.mu.Unlock()
+	f(&im.prog)
+}
+
+// Triggered fires when someone asks for a run right now (instead of
+// waiting for the next interval).
+func (im *Importer) Triggered() <-chan struct{} {
+	im.once.Do(func() { im.trigger = make(chan struct{}, 1) })
+	return im.trigger
+}
+
+// Trigger asks for a run right now; it never blocks.
+func (im *Importer) Trigger() {
+	im.Triggered()
+	select {
+	case im.trigger <- struct{}{}:
+	default:
+	}
+}
+
+// RetryFailed requests every failed folder again and returns how many.
+func (im *Importer) RetryFailed(ctx context.Context) (int, error) {
+	records, err := im.Log.ImportRecords(ctx)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, r := range records {
+		if r.State != ImportFailed {
+			continue
+		}
+		r.State, r.Message, r.Signature = ImportQueued, "import requested", ""
+		if err := im.save(ctx, r); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
 }
 
 // ImportSummary counts the outcome of a run.
@@ -125,6 +188,8 @@ func (im *Importer) now() time.Time {
 // once they are complete.
 func (im *Importer) Run(ctx context.Context) (ImportSummary, error) {
 	var sum ImportSummary
+	im.setProgress(func(p *ImportProgress) { *p = ImportProgress{Running: true, SinceUnix: im.now().Unix()} })
+	defer im.setProgress(func(p *ImportProgress) { *p = ImportProgress{} })
 	files, err := im.Downloads.List(ctx)
 	if err != nil {
 		return sum, err
@@ -195,7 +260,9 @@ func (im *Importer) Run(ctx context.Context) (ImportSummary, error) {
 			sum.Waiting++
 			continue
 		}
+		im.setProgress(func(p *ImportProgress) { p.Current = u.Path })
 		n, err := im.importUnit(ctx, u, &rec)
+		im.setProgress(func(p *ImportProgress) { p.Current, p.DoneUnits = "", p.DoneUnits+1 })
 		sum.Files += n
 		rec.Files += n
 		switch {
@@ -515,23 +582,44 @@ func (im *Importer) Preview(ctx context.Context) ([]UnitPreview, error) {
 	}
 	var out []UnitPreview
 	for _, u := range importer.Units(files) {
-		p := UnitPreview{Source: u.Path}
-		p.Settled, p.Why = importer.Settled(u, im.now(), im.Settle)
-		expanded, err := im.Downloads.Expand(ctx, u.Path, u.Files)
-		if err != nil {
-			p.Err = err
-			out = append(out, p)
-			continue
-		}
-		creatorDir, err := im.creatorDir(ctx, u.Creator)
+		p, err := im.previewUnit(ctx, u)
 		if err != nil {
 			return nil, err
-		}
-		p.Placements = importer.Placements(u, expanded, creatorDir)
-		if len(p.Placements) > 0 {
-			p.Target = modelDirOf(p.Placements[0].Target)
 		}
 		out = append(out, p)
 	}
 	return out, nil
+}
+
+// PreviewUnit is Preview for one download folder.
+func (im *Importer) PreviewUnit(ctx context.Context, source string) (UnitPreview, error) {
+	files, err := im.Downloads.List(ctx)
+	if err != nil {
+		return UnitPreview{}, err
+	}
+	for _, u := range importer.Units(files) {
+		if u.Path == source {
+			return im.previewUnit(ctx, u)
+		}
+	}
+	return UnitPreview{}, ErrNotFound
+}
+
+func (im *Importer) previewUnit(ctx context.Context, u importer.Unit) (UnitPreview, error) {
+	p := UnitPreview{Source: u.Path}
+	p.Settled, p.Why = importer.Settled(u, im.now(), im.Settle)
+	expanded, err := im.Downloads.Expand(ctx, u.Path, u.Files)
+	if err != nil {
+		p.Err = err
+		return p, nil
+	}
+	creatorDir, err := im.creatorDir(ctx, u.Creator)
+	if err != nil {
+		return p, err
+	}
+	p.Placements = importer.Placements(u, expanded, creatorDir)
+	if len(p.Placements) > 0 {
+		p.Target = modelDirOf(p.Placements[0].Target)
+	}
+	return p, nil
 }

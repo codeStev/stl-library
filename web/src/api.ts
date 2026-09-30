@@ -208,6 +208,24 @@ export interface ImportRecord {
   updated: number;
 }
 
+export interface ImportList {
+  enabled: boolean;
+  running: boolean;
+  current?: string;
+  since?: number;
+  done: number;
+  records: ImportRecord[];
+}
+
+export interface ImportPreview {
+  target?: string;
+  settled: boolean;
+  why?: string;
+  error?: string;
+  total: number;
+  placements: { from: string; to: string }[];
+}
+
 export interface Collection {
   id: number;
   name: string;
@@ -366,8 +384,11 @@ export const api = {
   testNotifications: (s: NotificationSettings) => send("POST", "/api/settings/notifications/test", s),
   scanState: () => get<ScanState>("/api/library/scan"),
   requestScan: () => send("POST", "/api/library/scan"),
-  imports: () => get<{ enabled: boolean; records: ImportRecord[] }>("/api/imports"),
+  imports: () => get<ImportList>("/api/imports"),
   requestImport: (source: string) => send("POST", "/api/imports/request", { source }),
+  runImport: () => send("POST", "/api/imports/run"),
+  retryFailedImports: () => send<{ requested: number }>("POST", "/api/imports/retry-failed"),
+  previewImport: (source: string) => get<ImportPreview>(`/api/imports/preview?source=${encodeURIComponent(source)}`),
   enqueue: (variantId: number, note = "") => send("PUT", `/api/variants/${variantId}/queue`, { note }),
   dequeue: (variantId: number) => send("DELETE", `/api/variants/${variantId}/queue`),
   collections: () => get<Collection[]>("/api/collections"),
