@@ -211,7 +211,7 @@ export function ModelPage({ id }: { id: number }) {
                   ))}
                 </ul>
               )}
-              <LivePreview variant={sel} />
+              <LivePreview variant={sel} onSetPreview={(png) => api.setPreview(m.id, png).then(refresh)} />
               <PrintProgress variant={sel} />
               <div className="actions">
                 <AddToPrint parts={sel.parts.filter((p) => !isSliced(p.name)).map((p) => ({ id: p.id, count: 1 }))} label="Add all parts to a print" />
@@ -384,7 +384,7 @@ const viewable3d = (n: string) => /\.(stl|obj|3mf)$/i.test(n);
 
 // An optional 3D view inside the page, for the selected variant. Off by default (it loads the
 // file); the choice is remembered.
-function LivePreview({ variant }: { variant: Variant }) {
+function LivePreview({ variant, onSetPreview }: { variant: Variant; onSetPreview: (png: Blob) => Promise<unknown> }) {
   const [on, setOn] = useState(() => {
     try {
       return localStorage.getItem("live3d") === "1";
@@ -423,7 +423,7 @@ function LivePreview({ variant }: { variant: Variant }) {
             ))}
           </select>
           <Suspense fallback={<div className="viewer inline viewer-status">Loading viewer…</div>}>
-            <Viewer key={part.id} url={api.partURL(part.id)} name={part.name} size={part.size} inline />
+            <Viewer key={part.id} url={api.partURL(part.id)} name={part.name} size={part.size} inline onSetPreview={onSetPreview} />
           </Suspense>
         </>
       )}

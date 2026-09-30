@@ -9,11 +9,11 @@ const ctx = self as unknown as {
 ctx.onmessage = (e) => {
   try {
     const geo = new STLLoader().parse(e.data);
+    // The normals written in the file are often zero or wrong: work them out from the triangles.
+    geo.computeVertexNormals();
     const pos = geo.getAttribute("position").array as Float32Array;
-    const nor = geo.getAttribute("normal")?.array as Float32Array | undefined;
-    const transfer: Transferable[] = [pos.buffer];
-    if (nor) transfer.push(nor.buffer);
-    ctx.postMessage({ pos, nor }, transfer);
+    const nor = geo.getAttribute("normal").array as Float32Array;
+    ctx.postMessage({ pos, nor }, [pos.buffer, nor.buffer]);
   } catch (err) {
     ctx.postMessage({ error: String(err) });
   }
