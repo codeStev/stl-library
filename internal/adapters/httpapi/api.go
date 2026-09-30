@@ -29,6 +29,8 @@ type API struct {
 	User   app.UserData
 	// Plates stores uploaded sliced files (outside the library).
 	Plates app.PlateFiles
+	// Previews holds the pictures chosen as a model's preview (from the 3D viewer).
+	Previews app.PreviewOverrides
 	// Importer is set when importing from a downloads folder is on.
 	Importer *app.Importer
 	// Printing handles the (optional) network printer.
@@ -65,6 +67,8 @@ func (a *API) Handler() http.Handler {
 	h("GET /api/models", full, a.searchModels)
 	h("GET /api/models/{id}", full, a.model)
 	h("GET /api/models/{id}/thumb", full, a.modelThumb)
+	h("PUT /api/models/{id}/preview", full, a.setPreview)
+	h("DELETE /api/models/{id}/preview", full, a.resetPreview)
 	h("GET /api/creators", full, a.creators)
 	h("GET /api/facets", full, a.facets)
 	h("GET /api/issues", full, a.issues)
@@ -147,6 +151,8 @@ type modelSummary struct {
 	Prints      int      `json:"prints"`
 	Hidden      bool     `json:"hidden,omitempty"`
 	// AddedUnix: when the scan first saw the model; LastPrintedUnix: its last print, if any.
+	// PreviewVersion: when a chosen preview was made (0: none); part of the picture's URL.
+	PreviewVersion  int64 `json:"previewVersion,omitempty"`
 	AddedUnix       int64 `json:"addedUnix,omitempty"`
 	LastPrintedUnix int64 `json:"lastPrintedUnix,omitempty"`
 }
@@ -197,7 +203,7 @@ func summary(m app.ModelSummary) modelSummary {
 		tags = []string{}
 	}
 	return modelSummary{m.ID, m.Creator, m.Release, m.Category, m.Name, m.Dir, m.Variants, m.Parts, m.Bytes, m.Cover,
-		m.Cover != 0 || m.Renderable, m.DisplayName, tags, m.Prints, m.Hidden, m.FirstSeen, m.LastPrinted}
+		m.Cover != 0 || m.Renderable, m.DisplayName, tags, m.Prints, m.Hidden, 0, m.FirstSeen, m.LastPrinted}
 }
 
 func refs(fs []app.FileRef) []fileRef {
@@ -254,7 +260,9 @@ func (a *API) searchModels(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Total-Count", strconv.Itoa(total))
 	out := make([]modelSummary, 0, len(hits))
 	for _, h := range hits {
-		out = append(out, summary(h))
+		sm := summary(h)
+		sm.PreviewVersion = a.previews().Version(h.Dir)
+		out = append(out, sm)
 	}
 	writeJSON(w, out)
 }
@@ -270,6 +278,7 @@ func (a *API) model(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := modelDetail{modelSummary: summary(m.ModelSummary), Variants: []variant{}, Images: refs(m.Images)}
+	out.PreviewVersion = a.previews().Version(m.Dir)
 	for _, v := range m.Variants {
 		printed, err := a.Store.PrintedParts(r.Context(), v.ID)
 		if err != nil {
@@ -393,6 +402,38 @@ func (a *API) thumb(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/jpeg")
 	w.Header().Set("Cache-Control", "private, max-age=86400")
 	w.Write(data)
+}
+
+func (a *API) previews() app.Previews { return app.Previews{Store: a.Store, Overrides: a.Previews} }
+
+// setPreview takes a PNG (the viewer's current view) as the model's preview.
+func (a *API) setPreview(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<20+1))
+	if err != nil {
+		http.Error(w, "the picture is too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	if err := a.previews().Set(r.Context(), id, data); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) resetPreview(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	if err := a.previews().Reset(r.Context(), id); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *API) modelThumb(w http.ResponseWriter, r *http.Request) {

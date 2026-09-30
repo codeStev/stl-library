@@ -59,8 +59,10 @@ func server(t *testing.T) *httptest.Server {
 		t.Fatal(err)
 	}
 	files := disk.Files{Root: root}
+	previews := disk.PreviewStore{Dir: t.TempDir()}
 	thumbs := app.NewThumbs(store, files, disk.ThumbCache{Dir: t.TempDir()})
-	srv := httptest.NewServer((&API{Store: store, Files: files, Thumbs: thumbs, Plates: disk.PlateStore{Dir: t.TempDir()}, User: app.UserData{Store: store}}).Handler())
+	thumbs.Overrides = previews
+	srv := httptest.NewServer((&API{Store: store, Files: files, Thumbs: thumbs, Plates: disk.PlateStore{Dir: t.TempDir()}, Previews: previews, User: app.UserData{Store: store}}).Handler())
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -1189,5 +1191,77 @@ func TestFindingThings(t *testing.T) {
 	getJSON(t, srv, "/api/facets", &f)
 	if len(f["scale"]) == 0 || f["scale"][0].Value != "32mm" || f["scale"][0].Models != 1 || len(f["format"]) == 0 {
 		t.Errorf("facets: %+v", f)
+	}
+}
+
+func solidPNG(w, h int) []byte {
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	for i := range img.Pix {
+		img.Pix[i] = 200
+	}
+	var b bytes.Buffer
+	png.Encode(&b, img)
+	return b.Bytes()
+}
+
+func TestChosenPreviewOverridesThenResets(t *testing.T) {
+	srv := server(t)
+	var hits []modelSummary
+	getJSON(t, srv, "/api/models?q=bell", &hits)
+	id := itoa(hits[0].ID)
+	put := func(body []byte) int {
+		req, _ := http.NewRequest("PUT", srv.URL+"/api/models/"+id+"/preview", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "image/png")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	_, before := get(t, srv, "/api/models/"+id+"/thumb")
+	if hits[0].PreviewVersion != 0 {
+		t.Errorf("no chosen preview yet: %d", hits[0].PreviewVersion)
+	}
+	chosen := solidPNG(64, 48)
+	if code := put(chosen); code != 204 {
+		t.Fatalf("set: %d", code)
+	}
+	resp, after := get(t, srv, "/api/models/"+id+"/thumb")
+	if resp.Header.Get("Content-Type") != "image/png" || !bytes.Equal(after, chosen) || bytes.Equal(after, before) {
+		t.Errorf("the chosen picture is served: %v %d bytes", resp.Header.Get("Content-Type"), len(after))
+	}
+	getJSON(t, srv, "/api/models?q=bell", &hits)
+	var detail modelDetail
+	getJSON(t, srv, "/api/models/"+id, &detail)
+	if hits[0].PreviewVersion == 0 || detail.PreviewVersion != hits[0].PreviewVersion {
+		t.Errorf("version: list %d, detail %d", hits[0].PreviewVersion, detail.PreviewVersion)
+	}
+	// Bad pictures are refused: not a PNG, too small, huge.
+	for name, body := range map[string][]byte{"text": []byte("hello"), "tiny": solidPNG(4, 4), "empty": nil} {
+		if code := put(body); code != 400 {
+			t.Errorf("%s: %d", name, code)
+		}
+	}
+	if code := put(bytes.Repeat([]byte{1}, 5<<20)); code != 413 {
+		t.Errorf("too large: %d", code)
+	}
+	if _, now := get(t, srv, "/api/models/"+id+"/thumb"); !bytes.Equal(now, chosen) {
+		t.Error("failed attempts must not change the chosen picture")
+	}
+	if code, _ := send(t, srv, "PUT", "/api/models/99999/preview", "x"); code != 400 && code != 404 {
+		t.Errorf("unknown model: %d", code)
+	}
+	// Reset: back to the model's own picture.
+	if code, _ := send(t, srv, "DELETE", "/api/models/"+id+"/preview", ""); code != 204 {
+		t.Fatalf("reset: %d", code)
+	}
+	if _, back := get(t, srv, "/api/models/"+id+"/thumb"); !bytes.Equal(back, before) {
+		t.Error("after reset the original picture is served again")
+	}
+	var reset []modelSummary
+	getJSON(t, srv, "/api/models?q=bell", &reset)
+	if reset[0].PreviewVersion != 0 {
+		t.Errorf("version after reset: %d", reset[0].PreviewVersion)
 	}
 }

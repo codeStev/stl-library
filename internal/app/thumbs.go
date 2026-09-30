@@ -32,7 +32,9 @@ type Thumbs struct {
 	Store Store
 	Files Files
 	Cache ThumbCache
-	gen   chan struct{}
+	// Overrides holds pictures people chose as a model's preview; they win over everything else.
+	Overrides PreviewOverrides
+	gen       chan struct{}
 }
 
 func NewThumbs(s Store, f Files, c ThumbCache) *Thumbs {
@@ -49,6 +51,11 @@ func (t *Thumbs) Model(ctx context.Context, id int64) ([]byte, string, error) {
 	m, err := t.Store.Model(ctx, id)
 	if err != nil {
 		return nil, "", err
+	}
+	if t.Overrides != nil {
+		if data, _, ok, err := t.Overrides.Get(overrideKey(m.Dir)); err == nil && ok {
+			return data, "image/png", nil
+		}
 	}
 	var imgErr error
 	if m.Cover != 0 {

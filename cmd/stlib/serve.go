@@ -46,7 +46,9 @@ func serve(ctx context.Context, root, data, listen string, every time.Duration, 
 	defer store.Close()
 
 	files := disk.Files{Root: root}
+	previews := disk.PreviewStore{Dir: filepath.Join(data, "previews")}
 	thumbs := app.NewThumbs(store, files, disk.ThumbCache{Dir: filepath.Join(data, "thumbs")})
+	thumbs.Overrides = previews
 	keys, err := secrets.Load(os.Getenv("APP_SECRET"), data)
 	if err != nil {
 		return err
@@ -61,7 +63,7 @@ func serve(ctx context.Context, root, data, listen string, every time.Duration, 
 	if err != nil {
 		return err
 	}
-	api := &httpapi.API{Store: store, Files: files, Thumbs: thumbs, Plates: disk.PlateStore{Dir: filepath.Join(data, "plates")}, User: app.UserData{Store: store}, Printing: printing,
+	api := &httpapi.API{Store: store, Files: files, Thumbs: thumbs, Plates: disk.PlateStore{Dir: filepath.Join(data, "plates")}, Previews: previews, User: app.UserData{Store: store}, Printing: printing,
 		Notifications: notifications, Auth: auth, TrustProxy: os.Getenv("TRUST_PROXY_HEADERS") == "true",
 		SecureCookies: strings.HasPrefix(os.Getenv("PUBLIC_URL"), "https://")}
 	watcher := &app.PrintWatcher{Printing: printing, Store: store, Notify: notifications}
