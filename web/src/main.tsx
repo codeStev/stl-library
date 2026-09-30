@@ -27,10 +27,38 @@ function useRoute(): string {
   return hash;
 }
 
+// The navigation, in the order shown. "match" names the routes that belong to an entry besides its own address.
+const NAV: { to: string; label: string; title?: string; admin?: boolean; match?: RegExp }[] = [
+  { to: "#/", label: "Library", match: /^#\/model\// },
+  { to: "#/collections", label: "Collections" },
+  { to: "#/prints", label: "Prints", match: /^#\/print\// },
+  { to: "#/queue", label: "Print queue" },
+  { to: "#/printer", label: "Printer" },
+  { to: "#/imports", label: "Imports" },
+  { to: "#/health", label: "Health", title: "Duplicates, damaged files, storage and leftovers" },
+  { to: "#/issues", label: "Issues", title: "Folders that don't follow the folder convention, and suggested fixes" },
+  { to: "#/settings", label: "Settings", admin: true },
+  { to: "#/accounts", label: "Accounts", admin: true },
+];
+
+function isActive(route: string, to: string): boolean {
+  if (to === "#/") return route === "#/" || route === "" || route.startsWith("#/model/");
+  return route === to || route.startsWith(to + "/") || route.startsWith(to + "?");
+}
+
+// The title of the browser tab says where you are (history and tab lists show it).
+function titleFor(route: string): string {
+  const hit = NAV.find((n) => n.to !== "#/" && isActive(route, n.to));
+  return hit ? `${hit.label} · STL Library` : "STL Library";
+}
+
 function App({ me, signOut }: { me: Me; signOut: () => void }) {
   const admin = me.role === "ADMIN";
   const route = useRoute();
   const model = route.match(/^#\/model\/(\d+)/);
+  useEffect(() => {
+    if (!model) document.title = titleFor(route); // a model page sets its own
+  }, [route, model]);
   return (
     <>
       <header>
@@ -38,16 +66,11 @@ function App({ me, signOut }: { me: Me; signOut: () => void }) {
           STL Library
         </a>
         <nav>
-          <a href="#/">Library</a>
-          <a href="#/collections">Collections</a>
-          <a href="#/prints">Prints</a>
-          <a href="#/health">Health</a>
-          <a href="#/queue">Print queue</a>
-          <a href="#/printer">Printer</a>
-          <a href="#/imports">Imports</a>
-          <a href="#/issues">Not following the convention</a>
-          {admin && <a href="#/settings">Settings</a>}
-          {admin && <a href="#/accounts">Accounts</a>}
+          {NAV.filter((n) => !n.admin || admin).map((n) => (
+            <a key={n.to} href={n.to} title={n.title} aria-current={isActive(route, n.to) ? "page" : undefined}>
+              {n.label}
+            </a>
+          ))}
         </nav>
         {me.email && (
           <a href="#/account" className="me" title="Your account">

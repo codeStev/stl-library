@@ -90,6 +90,10 @@ export function ModelPage({ id }: { id: number }) {
   }, [m]);
 
   if (error) return <p className="error">{error}</p>;
+  const shownName = m ? displayName(m) : "";
+  useEffect(() => {
+    if (shownName) document.title = `${shownName} · STL Library`;
+  }, [shownName]);
   if (!m) return <p>Loading…</p>;
   const pictures = m.images.filter((f) => /\.(jpe?g|png|webp|gif)$/i.test(f.name));
   const docs = m.images.filter((f) => !/\.(jpe?g|png|webp|gif)$/i.test(f.name));

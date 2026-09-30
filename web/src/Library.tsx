@@ -44,10 +44,23 @@ export function Library({ admin = false }: { admin?: boolean }) {
     })(),
   );
   const [error, setError] = useState("");
+  const [loaded, setLoaded] = useState(false); // the first answer is in (before it "0 models" would be a lie)
   const [selecting, setSelecting] = useState(false);
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [note, setNote] = useState("");
   const [moving, setMoving] = useState(false);
+  // "/" jumps to the search box, like on most sites.
+  const searchBox = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const on = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey || (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) || t?.isContentEditable) return;
+      e.preventDefault();
+      searchBox.current?.focus();
+    };
+    addEventListener("keydown", on);
+    return () => removeEventListener("keydown", on);
+  }, []);
   // A changed filter starts at the first page.
   const set = (patch: Partial<Filters>) => {
     setF((prev) => ({ ...prev, ...patch }));
@@ -72,6 +85,7 @@ export function Library({ admin = false }: { admin?: boolean }) {
       (r) => {
         setModels(r.items);
         setTotal(r.total);
+        setLoaded(true);
         if (r.items.length === 0 && r.total > 0) setPage(Math.max(0, Math.ceil(r.total / PAGE) - 1)); // the page is gone (fewer results now)
       },
       (e) => setError(String(e)),
@@ -88,6 +102,7 @@ export function Library({ admin = false }: { admin?: boolean }) {
           if (mine !== seq.current) return; // a newer search is on its way
           setModels(r.items);
           setTotal(r.total);
+          setLoaded(true);
           if (r.items.length === 0 && r.total > 0) setPage(Math.max(0, Math.ceil(r.total / PAGE) - 1));
         },
         (e) => setError(String(e)),
@@ -182,8 +197,10 @@ export function Library({ admin = false }: { admin?: boolean }) {
     <>
       <div className="toolbar">
         <input
+          ref={searchBox}
           type="search"
-          placeholder="Search models, creators, releases, tags…"
+          placeholder="Search models, creators, releases, tags…  ( / )"
+          aria-label="Search"
           value={f.q}
           onChange={(e) => set({ q: e.target.value })}
           autoFocus
@@ -267,8 +284,8 @@ export function Library({ admin = false }: { admin?: boolean }) {
       {error && <p className="error">{error}</p>}
       <div className="resultbar">
         <span className="muted">
-          {total.toLocaleString()} model{total === 1 ? "" : "s"}
-          {pages > 1 && ` · page ${page + 1} of ${pages}`}
+          {loaded ? `${total.toLocaleString()} model${total === 1 ? "" : "s"}` : "Loading…"}
+          {loaded && pages > 1 && ` · page ${page + 1} of ${pages}`}
         </span>
         <Pager page={page} pages={pages} onPage={goto} />
       </div>
@@ -378,7 +395,17 @@ export function Library({ admin = false }: { admin?: boolean }) {
           </a>
         ))}
       </div>
-      {models.length === 0 && !error && <p className="empty">No models found.</p>}
+      {!loaded && !error && <p className="empty">Loading…</p>}
+      {loaded && models.length === 0 && !error && (
+        <p className="empty">
+          No models found.{" "}
+          {JSON.stringify({ ...emptyFilters, ...f }) !== JSON.stringify(emptyFilters) && (
+            <button className="link" onClick={() => set({ ...empty })}>
+              Clear the search and filters
+            </button>
+          )}
+        </p>
+      )}
       <Pager page={page} pages={pages} onPage={goto} />
     </>
   );

@@ -45,8 +45,9 @@ export function Issues({ admin = false }: { admin?: boolean }) {
   return (
     <div className="issues">
       <p>
-        {issues.length} folders don't follow the folder convention. Their files are not shown in the library until
-        they are moved into place.
+        {issues.length === 0
+          ? "Every folder follows the folder convention."
+          : `${issues.length} folder${issues.length === 1 ? " doesn't" : "s don't"} follow the folder convention. ${issues.length === 1 ? "Its" : "Their"} files are not shown in the library until ${issues.length === 1 ? "it is" : "they are"} moved into place.`}
       </p>
       {fixes && fixes.suggestions.length > 0 && (
         <details className="fixes" open>
