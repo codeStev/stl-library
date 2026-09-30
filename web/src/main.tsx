@@ -79,7 +79,7 @@ function App({ me, signOut }: { me: Me; signOut: () => void }) {
         ) : route.startsWith("#/account") && me.id ? (
           <AccountPage me={me} signOut={signOut} />
         ) : (
-          <Library />
+          <Library admin={admin} />
         )}
       </main>
     </>

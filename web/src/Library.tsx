@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { BulkMove } from "./BulkMove";
 import { TagPicker } from "./TagPicker";
 import { api, displayName, emptyFilters, formatDate, type Collection, type Creator, type Facet, type Filters, type ModelSummary, type Tag } from "./api";
 
@@ -22,7 +23,7 @@ function loadPage(): number {
 // previews and numbered pages. Filters, page and scroll position live in
 // sessionStorage, so going back from a model lands on the same page at the
 // same place.
-export function Library() {
+export function Library({ admin = false }: { admin?: boolean }) {
   const [f, setF] = useState<Filters>(loadFilters);
   const [page, setPage] = useState(loadPage);
   const [creators, setCreators] = useState<Creator[]>([]);
@@ -46,6 +47,7 @@ export function Library() {
   const [selecting, setSelecting] = useState(false);
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [note, setNote] = useState("");
+  const [moving, setMoving] = useState(false);
   // A changed filter starts at the first page.
   const set = (patch: Partial<Filters>) => {
     setF((prev) => ({ ...prev, ...patch }));
@@ -300,6 +302,11 @@ export function Library() {
                   remove from this collection
                 </button>
               )}
+              {admin && (
+                <button className="link" onClick={() => setMoving((v) => !v)}>
+                  move / rename…
+                </button>
+              )}
               {pickedTags.length > 0 && (
                 <>
                   <span>Remove tag</span>
@@ -317,6 +324,19 @@ export function Library() {
           )}
           {note && <span className="note">{note}</span>}
         </div>
+      )}
+      {selecting && moving && picked.size > 0 && (
+        <BulkMove
+          ids={[...picked]}
+          onClose={() => setMoving(false)}
+          onDone={(message) => {
+            setMoving(false);
+            setPicked(new Set());
+            setNote(message);
+            setTimeout(load, 2500); // the library rescans after a move
+            load();
+          }}
+        />
       )}
       <div className="grid">
         {models.map((m) => (

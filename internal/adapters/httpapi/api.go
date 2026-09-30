@@ -106,6 +106,8 @@ func (a *API) Handler() http.Handler {
 	h("POST /api/health/pause", admin, a.healthPause)
 	h("POST /api/health/events/{id}/dismiss", admin, a.dismissHealthEvent)
 	h("GET /api/duplicates", full, a.duplicates)
+	h("POST /api/bulk/plan", admin, a.bulkPlan)
+	h("POST /api/bulk/apply", admin, a.bulkApply)
 	h("GET /api/storage", full, a.storage)
 	h("GET /api/tidy", full, a.tidy)
 	h("POST /api/tidy/run", admin, a.tidyRun)
@@ -909,7 +911,16 @@ func (a *API) uploadSlicePreview(w http.ResponseWriter, r *http.Request) {
 	writeSlicePreview(w, m, err)
 }
 
-func (a *API) fixUC() app.Fixes { return app.Fixes{Store: a.Store, Editor: a.Editor} }
+func (a *API) fixUC() app.Fixes {
+	keys, _ := a.Store.(app.KeyMover)
+	return app.Fixes{Store: a.Store, Editor: a.Editor, Keys: keys, Overrides: a.Previews}
+}
+
+func (a *API) bulkUC() app.Bulk {
+	keys, _ := a.Store.(app.KeyMover)
+	dirs, _ := a.Store.(app.ModelDirs)
+	return app.Bulk{Store: a.Store, Editor: a.Editor, Keys: keys, Dirs: dirs, Overrides: a.Previews}
+}
 
 // fixes lists the suggested folder renames and the journal of applied ones.
 func (a *API) fixes(w http.ResponseWriter, r *http.Request) {
@@ -946,6 +957,69 @@ func (a *API) fixes(w http.ResponseWriter, r *http.Request) {
 	}
 	out["suggestions"], out["journal"] = ss, rs
 	writeJSON(w, out)
+}
+
+type bulkBody struct {
+	IDs      []int64 `json:"ids"`
+	Creator  *string `json:"creator"`
+	Release  *string `json:"release"`
+	Category *string `json:"category"`
+	Find     string  `json:"find"`
+	Replace  string  `json:"replace"`
+}
+
+func (b bulkBody) edit() app.BulkEdit {
+	return app.BulkEdit{IDs: b.IDs, Creator: b.Creator, Release: b.Release, Category: b.Category, Find: b.Find, Replace: b.Replace}
+}
+
+type bulkRowJSON struct {
+	ID      int64  `json:"id"`
+	Name    string `json:"name"`
+	From    string `json:"from"`
+	To      string `json:"to"`
+	Problem string `json:"problem,omitempty"`
+}
+
+func bulkRows(rows []app.BulkRow) []bulkRowJSON {
+	out := make([]bulkRowJSON, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, bulkRowJSON{r.ID, r.Name, r.From, r.To, r.Problem})
+	}
+	return out
+}
+
+// bulkPlan shows what a bulk edit would do with each model, without touching anything.
+func (a *API) bulkPlan(w http.ResponseWriter, r *http.Request) {
+	var body bulkBody
+	if !readJSON(w, r, &body) {
+		return
+	}
+	rows, err := a.bulkUC().Plan(r.Context(), body.edit())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"canApply": a.Editor != nil, "rows": bulkRows(rows)})
+}
+
+// bulkApply moves and renames the models the plan shows as free of problems.
+func (a *API) bulkApply(w http.ResponseWriter, r *http.Request) {
+	var body bulkBody
+	if !readJSON(w, r, &body) {
+		return
+	}
+	res, err := a.bulkUC().Apply(r.Context(), body.edit())
+	if err != nil {
+		fixFail(w, err)
+		return
+	}
+	if res.Done > 0 && a.Scan != nil {
+		a.Scan.Request()
+	}
+	if res.Failed == nil {
+		res.Failed = []string{}
+	}
+	writeJSON(w, map[string]any{"done": res.Done, "failed": res.Failed, "rows": bulkRows(res.Rows)})
 }
 
 func (a *API) storage(w http.ResponseWriter, r *http.Request) {

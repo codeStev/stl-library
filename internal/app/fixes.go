@@ -22,13 +22,56 @@ type LibraryEditor interface {
 	Stat(ctx context.Context, rel string) (size int64, exists bool, err error)
 	// Rename renames a folder within its parent; it refuses to replace anything.
 	Rename(ctx context.Context, from, to string) error
+	// Move moves a folder to another parent and/or name, creating the parent folders; it refuses to
+	// replace anything.
+	Move(ctx context.Context, from, to string) error
+}
+
+// KeyMover follows a moved folder in the index and in everything keyed by its path (tags, prints,
+// queue, collections, labels, plates, hashes), so nothing people attached to it is lost.
+type KeyMover interface {
+	MoveKeys(ctx context.Context, from, to string) error
+}
+
+// ModelDirs tells whether a folder is a model's folder in the index.
+type ModelDirs interface {
+	IsModelDir(ctx context.Context, dir string) (bool, error)
 }
 
 // Fixes suggests and applies renames of folders that don't follow the convention.
 type Fixes struct {
 	Store  Store
 	Editor LibraryEditor
-	Now    func() time.Time
+	// Keys (optional) carries user data along with a renamed or moved folder; Overrides (optional)
+	// carries a model's chosen preview picture.
+	Keys      KeyMover
+	Overrides PreviewOverrides
+	Now       func() time.Time
+}
+
+// follow carries the data attached to a folder along after it was moved on disk. When that fails, the
+// folder is moved back.
+func (f Fixes) follow(ctx context.Context, from, to string) error {
+	if f.Keys != nil {
+		if err := f.Keys.MoveKeys(ctx, from, to); err != nil {
+			_ = f.Editor.Move(ctx, to, from)
+			return err
+		}
+	}
+	moveOverride(f.Overrides, from, to)
+	return nil
+}
+
+// moveOverride re-keys a model's chosen preview picture (a missing one is nothing to do).
+func moveOverride(o PreviewOverrides, from, to string) {
+	if o == nil {
+		return
+	}
+	if data, _, ok, err := o.Get(overrideKey(from)); err == nil && ok {
+		if o.Put(overrideKey(to), data) == nil {
+			_ = o.Delete(overrideKey(from))
+		}
+	}
 }
 
 func (f Fixes) now() int64 {
@@ -80,6 +123,9 @@ func (f Fixes) Apply(ctx context.Context, from, to string) (int64, error) {
 	if err := f.Editor.Rename(ctx, from, to); err != nil {
 		return 0, err
 	}
+	if err := f.follow(ctx, from, to); err != nil {
+		return 0, err
+	}
 	return f.Store.AddFix(ctx, from, to, f.now())
 }
 
@@ -92,7 +138,11 @@ func (f Fixes) Undo(ctx context.Context, id int64) error {
 	if rec.Undone || f.Editor == nil {
 		return ErrInvalid
 	}
-	if err := f.Editor.Rename(ctx, rec.To, rec.From); err != nil {
+	// a bulk edit may have moved the folder to another parent: Move covers renames as well
+	if err := f.Editor.Move(ctx, rec.To, rec.From); err != nil {
+		return err
+	}
+	if err := f.follow(ctx, rec.To, rec.From); err != nil {
 		return err
 	}
 	return f.Store.MarkFixUndone(ctx, id)

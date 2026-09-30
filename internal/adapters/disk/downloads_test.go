@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -229,5 +230,39 @@ func TestPortableNameReplacesWhatNTFSRefuses(t *testing.T) {
 		if got := portableName(in); got != want {
 			t.Errorf("portableName(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestMoveMovesAFolderToANewParentAndRefusesToReplace(t *testing.T) {
+	root := t.TempDir()
+	mk := func(rel string) {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte("x"), 0o644)
+	}
+	mk("Old/R/Model/Supported/a.stl")
+	mk("New/R2/Other/b.stl")
+	w := LibraryWriter{Root: root}
+	ctx := context.Background()
+	if err := w.Move(ctx, "Old/R/Model", "New/R2/Model"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "New/R2/Model/Supported/a.stl")); err != nil {
+		t.Error(err)
+	}
+	if err := w.Move(ctx, "New/R2/Model", "New/R2/Other"); !errors.Is(err, ErrExists) {
+		t.Errorf("replace: %v", err)
+	}
+	if err := w.Move(ctx, "New/R2", "New/R2/Inner/R2"); err == nil {
+		t.Error("moved a folder into itself")
+	}
+	if err := w.Move(ctx, "Old/R/Gone", "Somewhere/Gone"); err == nil {
+		t.Error("moved a folder that is not there")
+	}
+	if err := w.Move(ctx, "../x", "Y/x"); err == nil {
+		t.Error("left the root")
+	}
+	if err := w.Move(ctx, "New/R2/Model/Supported/a.stl", "New/a.stl"); err == nil {
+		t.Error("moved a file")
 	}
 }

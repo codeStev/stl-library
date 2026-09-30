@@ -355,3 +355,12 @@ table.roster select { font: inherit; background: var(--panel); color: var(--text
 .bars .label, .bars .muted { position: relative; z-index: 1; }
 .releases { padding: 2px 0 6px 18px; font-size: 13px; }
 .releases li { display: flex; justify-content: space-between; gap: 10px; }
+.bulkmove { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; }
+.bulkmove .head { display: flex; justify-content: space-between; }
+.bulkmove .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.bulkmove label { display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
+.bulkmove .check { font-size: 12px; color: var(--muted); }
+.bulkrows { list-style: none; padding: 0; max-height: 320px; overflow: auto; font-size: 13px; }
+.bulkrows li { padding: 4px 0; border-bottom: 1px solid var(--line); }
+.bulkrows li.problem { opacity: 0.7; }
+.bulkrows code { word-break: break-all; }

@@ -208,6 +208,23 @@ export interface ImportRecord {
   updated: number;
 }
 
+export interface BulkRow {
+  id: number;
+  name: string;
+  from: string;
+  to: string;
+  problem?: string;
+}
+
+export interface BulkBody {
+  ids: number[];
+  creator?: string | null;
+  release?: string | null;
+  category?: string | null;
+  find?: string;
+  replace?: string;
+}
+
 export interface StorageReport {
   bytes: number;
   models: number;
@@ -414,6 +431,8 @@ export const api = {
   requestScan: () => send("POST", "/api/library/scan"),
   imports: () => get<ImportList>("/api/imports"),
   requestImport: (source: string) => send("POST", "/api/imports/request", { source }),
+  bulkPlan: (b: BulkBody) => send<{ canApply: boolean; rows: BulkRow[] }>("POST", "/api/bulk/plan", b),
+  bulkApply: (b: BulkBody) => send<{ done: number; failed: string[]; rows: BulkRow[] }>("POST", "/api/bulk/apply", b),
   storage: () => get<StorageReport>("/api/storage"),
   tidy: () => get<TidyState>("/api/tidy"),
   tidyRun: () => send("POST", "/api/tidy/run"),

@@ -338,6 +338,36 @@ func (w LibraryWriter) Rename(_ context.Context, from, to string) error {
 	return os.Rename(src, dst)
 }
 
+// Move moves a folder to another place in the library (another parent, another name), creating the
+// parent folders, and refuses to replace anything or to move a folder into itself. Like Rename it is
+// only used for changes the user confirmed.
+func (w LibraryWriter) Move(_ context.Context, from, to string) error {
+	src, err := w.full(from)
+	if err != nil {
+		return err
+	}
+	dst, err := w.full(to)
+	if err != nil {
+		return err
+	}
+	if from == to || strings.HasPrefix(to, from+"/") {
+		return ErrOutsideRoot
+	}
+	if info, err := os.Lstat(src); err != nil || !info.IsDir() {
+		if err == nil {
+			err = errors.New("not a folder")
+		}
+		return err
+	}
+	if _, err := os.Lstat(dst); err == nil {
+		return ErrExists
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	return os.Rename(src, dst)
+}
+
 // Write copies r into a hidden temporary file next to the target and
 // renames it when complete, so a half-written file never appears under
 // its real name (the library listing skips hidden files).
