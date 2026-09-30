@@ -173,3 +173,14 @@ func TestFixSplitsAFolderIntoCanonicalLevelsAndCarriesItsData(t *testing.T) {
 		t.Errorf("%v %v %v", ed.dirs, keys.moved, st.fixes)
 	}
 }
+
+func TestBulkFindReplaceTrimsTheEdgesOfTheNewName(t *testing.T) {
+	b, _, _, _ := newBulk()
+	rows, _ := b.Plan(context.Background(), BulkEdit{IDs: []int64{4}, Find: "Head", Replace: ""})
+	if rows[0].To != "Loot/Winter/Heroes/Bell" && rows[0].Problem == "" {
+		t.Errorf("%+v", rows[0])
+	}
+	if rows[0].Problem != "a folder of that name exists already" {
+		t.Errorf("%+v", rows[0])
+	}
+}

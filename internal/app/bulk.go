@@ -114,7 +114,7 @@ func (b Bulk) Plan(ctx context.Context, e BulkEdit) ([]BulkRow, error) {
 			category = *e.Category
 		}
 		if e.Find != "" {
-			name = strings.ReplaceAll(name, e.Find, e.Replace)
+			name = strings.TrimSpace(strings.ReplaceAll(name, e.Find, e.Replace))
 		}
 		row.To = joinLevels(creator, release, category, name)
 		switch {
