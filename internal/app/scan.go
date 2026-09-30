@@ -47,6 +47,23 @@ type Store interface {
 	EditCollection(ctx context.Context, id int64, add, remove []int64, atUnix int64) error
 	ModelCollections(ctx context.Context, modelID int64) ([]Collection, error)
 
+	// Prints (jobs) and uploaded plates.
+	Jobs(ctx context.Context) ([]JobSummary, error)
+	Job(ctx context.Context, id int64) (*Job, error)
+	CreateJob(ctx context.Context, name, note string, atUnix int64) (int64, error)
+	UpdateJob(ctx context.Context, id int64, name, note, state string, printedUnix int64) error
+	DeleteJob(ctx context.Context, id int64) error
+	SetJobItems(ctx context.Context, id int64, items []SliceItem) error
+	SetJobPlates(ctx context.Context, id int64, plates []PlateRef) error
+	AddUpload(ctx context.Context, u Upload) error
+	Upload(ctx context.Context, id string) (*Upload, error)
+	// PrintedParts says how often each part of a variant was printed (in printed jobs).
+	PrintedParts(ctx context.Context, variantID int64) (map[int64]int, error)
+
+	// Contents of uploaded plates (same links as library plates).
+	UploadContents(ctx context.Context, uploadID string) ([]PartRef, error)
+	SetUploadContents(ctx context.Context, uploadID string, items []SliceItem) error
+
 	// What a sliced file contains, and where a part is used.
 	SliceContents(ctx context.Context, partID int64) (SliceInfo, error)
 	SetSliceContents(ctx context.Context, partID int64, items []SliceItem) error

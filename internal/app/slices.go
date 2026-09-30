@@ -16,6 +16,7 @@ type SliceItem struct {
 // how many copies. Missing: the file is not in the library any more (the
 // link stays, in case it comes back).
 type PartRef struct {
+	UploadID  string // set when the file is an uploaded plate
 	PartID    int64
 	Path      string
 	ModelID   int64
@@ -83,6 +84,37 @@ func (s Slices) SetContents(ctx context.Context, sliceID int64, items []SliceIte
 		out = append(out, SliceItem{PartID: id, Count: n})
 	}
 	return s.Store.SetSliceContents(ctx, sliceID, out)
+}
+
+// UploadContents returns what an uploaded plate contains.
+func (s Slices) UploadContents(ctx context.Context, uploadID string) ([]PartRef, error) {
+	return s.Store.UploadContents(ctx, uploadID)
+}
+
+// SetUploadContents replaces what an uploaded plate contains (same rules as SetContents).
+func (s Slices) SetUploadContents(ctx context.Context, uploadID string, items []SliceItem) error {
+	if len(items) > maxSliceItems {
+		return ErrInvalid
+	}
+	merged := map[int64]int{}
+	var order []int64
+	for _, it := range items {
+		if it.Count < 1 || it.Count > maxSliceCount {
+			return ErrInvalid
+		}
+		if _, ok := merged[it.PartID]; !ok {
+			order = append(order, it.PartID)
+		}
+		merged[it.PartID] += it.Count
+	}
+	out := make([]SliceItem, 0, len(order))
+	for _, id := range order {
+		if merged[id] > maxSliceCount {
+			return ErrInvalid
+		}
+		out = append(out, SliceItem{PartID: id, Count: merged[id]})
+	}
+	return s.Store.SetUploadContents(ctx, uploadID, out)
 }
 
 // VariantCoverage lists, for each part of a variant, the sliced files it is in.

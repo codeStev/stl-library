@@ -10,6 +10,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -57,7 +58,7 @@ func server(t *testing.T) *httptest.Server {
 	}
 	files := disk.Files{Root: root}
 	thumbs := app.NewThumbs(store, files, disk.ThumbCache{Dir: t.TempDir()})
-	srv := httptest.NewServer((&API{Store: store, Files: files, Thumbs: thumbs, User: app.UserData{Store: store}}).Handler())
+	srv := httptest.NewServer((&API{Store: store, Files: files, Thumbs: thumbs, Plates: disk.PlateStore{Dir: t.TempDir()}, User: app.UserData{Store: store}}).Handler())
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -813,5 +814,204 @@ func TestSearchReportsTheTotalIgnoringThePage(t *testing.T) {
 	}
 	if got := total("/api/models?creator=Nobody"); got != "0" {
 		t.Errorf("none: %q", got)
+	}
+}
+
+func upload(t *testing.T, srv *httptest.Server, name, content string) (int, map[string]any) {
+	t.Helper()
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, _ := mw.CreateFormFile("file", name)
+	fw.Write([]byte(content))
+	mw.Close()
+	req, _ := http.NewRequest("POST", srv.URL+"/api/plates", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out map[string]any
+	json.NewDecoder(resp.Body).Decode(&out)
+	return resp.StatusCode, out
+}
+
+func TestPrintsProgressAndPlates(t *testing.T) {
+	srv := server(t)
+	var hits []modelSummary
+	getJSON(t, srv, "/api/models?q=bell", &hits)
+	var m modelDetail
+	getJSON(t, srv, "/api/models/"+itoa(hits[0].ID), &m)
+	ids := map[string]int64{}
+	var variantID int64
+	for _, v := range m.Variants {
+		for _, p := range v.Parts {
+			ids[p.Name] = p.ID
+			if p.Name == "bell.stl" {
+				variantID = v.ID
+			}
+		}
+	}
+	stl, lys := ids["bell.stl"], ids["base.lys"]
+	var other modelSummary
+	var all []modelSummary
+	getJSON(t, srv, "/api/models", &all)
+	for _, a := range all {
+		if a.ID != hits[0].ID {
+			other = a
+		}
+	}
+	var od modelDetail
+	getJSON(t, srv, "/api/models/"+itoa(other.ID), &od)
+	otherPart := od.Variants[0].Parts[0].ID
+
+	// A print with parts of two models and a library plate.
+	code, body := send(t, srv, "POST", "/api/jobs", `{"name":"  Dungeon   night ","note":"act 2"}`)
+	var created struct{ ID int64 }
+	json.Unmarshal([]byte(body), &created)
+	if code != 200 || created.ID == 0 {
+		t.Fatalf("create: %d %s", code, body)
+	}
+	jid := itoa(created.ID)
+	if code, _ := send(t, srv, "PUT", "/api/jobs/"+jid+"/items", `{"items":[{"partId":`+itoa(stl)+`,"count":2},{"partId":`+itoa(otherPart)+`,"count":1},{"partId":`+itoa(stl)+`,"count":1}]}`); code != 204 {
+		t.Fatalf("items: %d", code)
+	}
+	if code, _ := send(t, srv, "PUT", "/api/jobs/"+jid+"/plates", `{"plates":[{"partId":`+itoa(lys)+`}]}`); code != 204 {
+		t.Errorf("plates: %d", code)
+	}
+	if code, _ := send(t, srv, "PUT", "/api/jobs/"+jid+"/plates", `{"plates":[{"partId":`+itoa(stl)+`}]}`); code != 400 {
+		t.Errorf("an .stl is no plate: %d", code)
+	}
+	if code, _ := send(t, srv, "PUT", "/api/jobs/"+jid+"/plates", `{"plates":[{"partId":1,"uploadId":"x"}]}`); code != 400 {
+		t.Errorf("both refs: %d", code)
+	}
+	var j struct {
+		Name, State string
+		Items       []struct {
+			Name      string
+			Count     int
+			ModelName string
+		}
+		Plates []struct {
+			Name   string
+			PartID int64
+		}
+	}
+	getJSON(t, srv, "/api/jobs/"+jid, &j)
+	if j.Name != "Dungeon night" || j.State != "planned" || len(j.Items) != 2 || len(j.Plates) != 1 || j.Plates[0].Name != "base.lys" {
+		t.Errorf("job: %+v", j)
+	}
+	for _, it := range j.Items {
+		if it.Name == "bell.stl" && it.Count != 3 {
+			t.Errorf("counts add up: %+v", it)
+		}
+	}
+	printedOf := func() map[string]int {
+		var md modelDetail
+		getJSON(t, srv, "/api/models/"+itoa(hits[0].ID), &md)
+		for _, v := range md.Variants {
+			if v.ID == variantID {
+				return v.PrintedParts
+			}
+		}
+		return nil
+	}
+	if pp := printedOf(); len(pp) != 0 {
+		t.Errorf("nothing is printed while the print is only planned: %v", pp)
+	}
+	if code, _ := send(t, srv, "PUT", "/api/jobs/"+jid, `{"name":"Dungeon night","note":"act 2","state":"printed"}`); code != 204 {
+		t.Fatalf("mark printed: %d", code)
+	}
+	if pp := printedOf(); pp[itoa(stl)] != 3 {
+		t.Errorf("printed parts: %v", pp)
+	}
+	// A part of another model in the print is printed, too.
+	var od2 modelDetail
+	getJSON(t, srv, "/api/models/"+itoa(other.ID), &od2)
+	if od2.Variants[0].PrintedParts[itoa(otherPart)] != 1 {
+		t.Errorf("a part of another model: %v", od2.Variants[0].PrintedParts)
+	}
+	// Back to planned: no longer counted.
+	send(t, srv, "PUT", "/api/jobs/"+jid, `{"name":"Dungeon night","note":"","state":"planned"}`)
+	if pp := printedOf(); len(pp) != 0 {
+		t.Errorf("planned again: %v", pp)
+	}
+	if code, _ := send(t, srv, "PUT", "/api/jobs/"+jid, `{"name":"x","state":"bogus"}`); code != 400 {
+		t.Errorf("bad state: %d", code)
+	}
+
+	// An uploaded plate: stored outside the library, downloadable, linkable to parts and to a print.
+	if code, _ := upload(t, srv, "notaplate.txt", "hello"); code != 400 {
+		t.Errorf("only sliced files: %d", code)
+	}
+	code, u := upload(t, srv, "figure part 1.ctb", "CTBDATA")
+	if code != 200 || u["name"] != "figure part 1.ctb" || len(fmt.Sprint(u["id"])) != 64 {
+		t.Fatalf("upload: %d %v", code, u)
+	}
+	uid := fmt.Sprint(u["id"])
+	resp, data := get(t, srv, "/api/plates/"+uid)
+	if resp.StatusCode != 200 || string(data) != "CTBDATA" || !strings.Contains(resp.Header.Get("Content-Disposition"), "figure part 1.ctb") {
+		t.Errorf("download: %d %q %v", resp.StatusCode, data, resp.Header)
+	}
+	if code, _ := send(t, srv, "PUT", "/api/plates/"+uid+"/contents", `{"items":[{"partId":`+itoa(stl)+`,"count":4}]}`); code != 204 {
+		t.Errorf("upload contents: %d", code)
+	}
+	var uc struct {
+		Contents []struct {
+			Name  string
+			Count int
+		}
+	}
+	getJSON(t, srv, "/api/plates/"+uid+"/contents", &uc)
+	if len(uc.Contents) != 1 || uc.Contents[0].Name != "bell.stl" || uc.Contents[0].Count != 4 {
+		t.Errorf("upload contents: %+v", uc)
+	}
+	var back struct {
+		UsedIn []struct{ UploadID, Name string }
+	}
+	getJSON(t, srv, "/api/parts/"+itoa(stl)+"/contents", &back)
+	if len(back.UsedIn) != 1 || back.UsedIn[0].UploadID != uid || back.UsedIn[0].Name != "figure part 1.ctb" {
+		t.Errorf("the part knows the uploaded plate: %+v", back)
+	}
+	if code, _ := send(t, srv, "PUT", "/api/jobs/"+jid+"/plates", `{"plates":[{"uploadId":"`+uid+`"},{"partId":`+itoa(lys)+`}]}`); code != 204 {
+		t.Errorf("a print with an uploaded and a library plate: %d", code)
+	}
+	if code, _ := send(t, srv, "PUT", "/api/jobs/"+jid+"/plates", `{"plates":[{"uploadId":"`+strings.Repeat("a", 64)+`"}]}`); code != 404 {
+		t.Errorf("unknown upload: %d", code)
+	}
+	if code, _ := get(t, srv, "/api/plates/nothex"); code.StatusCode != 404 {
+		t.Errorf("bad upload id: %d", code.StatusCode)
+	}
+	// List and delete.
+	var list []struct {
+		Name          string
+		Items, Copies int
+		Plates        int
+	}
+	getJSON(t, srv, "/api/jobs", &list)
+	if len(list) != 1 || list[0].Items != 2 || list[0].Copies != 4 || list[0].Plates != 2 {
+		t.Errorf("list: %+v", list)
+	}
+	if code, _ := send(t, srv, "DELETE", "/api/jobs/"+jid, ""); code != 204 {
+		t.Errorf("delete: %d", code)
+	}
+	if code, _ := send(t, srv, "DELETE", "/api/jobs/"+jid, ""); code != 404 {
+		t.Errorf("delete again: %d", code)
+	}
+}
+
+func TestVariantMarkPrintedCountsAllItsPartsPrinted(t *testing.T) {
+	srv := server(t)
+	var hits []modelSummary
+	getJSON(t, srv, "/api/models?q=bell", &hits)
+	var m modelDetail
+	getJSON(t, srv, "/api/models/"+itoa(hits[0].ID), &m)
+	v := m.Variants[0]
+	send(t, srv, "POST", "/api/variants/"+itoa(v.ID)+"/prints", `{"note":""}`)
+	getJSON(t, srv, "/api/models/"+itoa(hits[0].ID), &m)
+	for _, mv := range m.Variants {
+		if mv.ID == v.ID && len(mv.PrintedParts) != len(mv.Parts) {
+			t.Errorf("all %d parts count as printed: %v", len(mv.Parts), mv.PrintedParts)
+		}
 	}
 }

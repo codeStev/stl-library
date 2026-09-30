@@ -162,6 +162,24 @@ var migrations = []string{
 		PRIMARY KEY (collection_id, dir)
 	);
 	CREATE INDEX collection_model_dir ON collection_model(dir);`,
+
+	// Prints: a named job holding parts (with counts) and plates. Plates are
+	// library files (by path) or uploads ("upload:<id>"). User data, by path.
+	`CREATE TABLE print_job (
+		id INTEGER PRIMARY KEY, name TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
+		state TEXT NOT NULL DEFAULT 'planned', created_unix INTEGER NOT NULL, printed_unix INTEGER NOT NULL DEFAULT 0
+	);
+	CREATE TABLE job_item (
+		job_id INTEGER NOT NULL REFERENCES print_job(id) ON DELETE CASCADE,
+		part_path TEXT NOT NULL, count INTEGER NOT NULL,
+		PRIMARY KEY (job_id, part_path)
+	);
+	CREATE INDEX job_item_part ON job_item(part_path);
+	CREATE TABLE job_plate (
+		job_id INTEGER NOT NULL REFERENCES print_job(id) ON DELETE CASCADE,
+		ref TEXT NOT NULL, PRIMARY KEY (job_id, ref)
+	);
+	CREATE TABLE upload (id TEXT PRIMARY KEY, name TEXT NOT NULL, size INTEGER NOT NULL, created_unix INTEGER NOT NULL);`,
 }
 
 func migrate(db *sql.DB) error {

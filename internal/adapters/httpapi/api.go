@@ -25,6 +25,8 @@ type API struct {
 	Files  app.Files
 	Thumbs *app.Thumbs
 	User   app.UserData
+	// Plates stores uploaded sliced files (outside the library).
+	Plates app.PlateFiles
 	// Importer is set when importing from a downloads folder is on.
 	Importer *app.Importer
 	// Printing handles the (optional) network printer.
@@ -85,6 +87,17 @@ func (a *API) Handler() http.Handler {
 	h("POST /api/library/scan", admin, a.requestScan)
 	h("GET /api/imports", full, a.imports)
 	h("POST /api/imports/request", admin, a.requestImport)
+	h("GET /api/jobs", full, a.jobs)
+	h("POST /api/jobs", full, a.createJob)
+	h("GET /api/jobs/{id}", full, a.job)
+	h("PUT /api/jobs/{id}", full, a.updateJob)
+	h("DELETE /api/jobs/{id}", full, a.deleteJob)
+	h("PUT /api/jobs/{id}/items", full, a.setJobItems)
+	h("PUT /api/jobs/{id}/plates", full, a.setJobPlates)
+	h("POST /api/plates", full, a.uploadPlate)
+	h("GET /api/plates/{uid}", full, a.downloadPlate)
+	h("GET /api/plates/{uid}/contents", full, a.uploadContents)
+	h("PUT /api/plates/{uid}/contents", full, a.setUploadContents)
 	h("GET /api/parts/{id}/contents", full, a.sliceContents)
 	h("PUT /api/parts/{id}/contents", full, a.setSliceContents)
 	h("GET /api/variants/{id}/slices", full, a.variantSlices)
@@ -142,6 +155,8 @@ type variant struct {
 	Parts  []fileRef         `json:"parts"`
 	Prints []print           `json:"prints"`
 	Queued bool              `json:"queued"`
+	// PrintedParts: how many copies of each part (by id) were printed, from the printed prints.
+	PrintedParts map[string]int `json:"printedParts"`
 	// Relabeled: dims/option come from a correction, not the folders.
 	Relabeled bool `json:"relabeled,omitempty"`
 }
@@ -244,10 +259,27 @@ func (a *API) model(w http.ResponseWriter, r *http.Request) {
 	}
 	out := modelDetail{modelSummary: summary(m.ModelSummary), Variants: []variant{}, Images: refs(m.Images)}
 	for _, v := range m.Variants {
+		printed, err := a.Store.PrintedParts(r.Context(), v.ID)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		pp := map[string]int{}
+		for id, n := range printed {
+			pp[strconv.FormatInt(id, 10)] = n
+		}
+		if len(v.Prints) > 0 { // "Mark printed" on the variant: all its parts were printed
+			for _, part := range v.Parts {
+				k := strconv.FormatInt(part.ID, 10)
+				if pp[k] == 0 {
+					pp[k] = 1
+				}
+			}
+		}
 		out.Variants = append(out.Variants, variant{
 			ID: v.ID, Label: strings.Join(convention.CanonicalSegments(v.Dims), " · "),
 			Dims: dims(v.Dims), Option: v.Option, Parts: refs(v.Parts),
-			Prints: prints(v.Prints), Queued: v.Queued, Relabeled: v.Relabeled,
+			Prints: prints(v.Prints), Queued: v.Queued, Relabeled: v.Relabeled, PrintedParts: pp,
 		})
 	}
 	writeJSON(w, out)
@@ -383,6 +415,7 @@ func (a *API) setTags(w http.ResponseWriter, r *http.Request) {
 }
 
 type partRef struct {
+	UploadID  string `json:"uploadId,omitempty"`
 	PartID    int64  `json:"partId,omitempty"`
 	Path      string `json:"path"`
 	Name      string `json:"name"`
@@ -395,7 +428,7 @@ type partRef struct {
 func partRefs(in []app.PartRef) []partRef {
 	out := make([]partRef, 0, len(in))
 	for _, r := range in {
-		out = append(out, partRef{r.PartID, r.Path, path.Base(r.Path), r.ModelID, r.ModelName, r.Count, r.Missing})
+		out = append(out, partRef{r.UploadID, r.PartID, r.Path, path.Base(r.Path), r.ModelID, r.ModelName, r.Count, r.Missing})
 	}
 	return out
 }
@@ -453,6 +486,243 @@ func (a *API) variantSlices(w http.ResponseWriter, r *http.Request) {
 		out[strconv.FormatInt(partID, 10)] = partRefs(refs)
 	}
 	writeJSON(w, map[string]any{"parts": out})
+}
+
+type jobSummaryJSON struct {
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	State       string `json:"state"`
+	Items       int    `json:"items"`
+	Copies      int    `json:"copies"`
+	Plates      int    `json:"plates"`
+	CreatedUnix int64  `json:"createdUnix"`
+	PrintedUnix int64  `json:"printedUnix,omitempty"`
+}
+
+type jobJSON struct {
+	ID          int64          `json:"id"`
+	Name        string         `json:"name"`
+	Note        string         `json:"note"`
+	State       string         `json:"state"`
+	CreatedUnix int64          `json:"createdUnix"`
+	PrintedUnix int64          `json:"printedUnix,omitempty"`
+	Items       []jobItemJSON  `json:"items"`
+	Plates      []jobPlateJSON `json:"plates"`
+}
+
+type jobItemJSON struct {
+	PartID    int64  `json:"partId,omitempty"`
+	Path      string `json:"path"`
+	Name      string `json:"name"`
+	ModelID   int64  `json:"modelId,omitempty"`
+	ModelName string `json:"modelName,omitempty"`
+	Count     int    `json:"count"`
+	Missing   bool   `json:"missing,omitempty"`
+}
+
+type jobPlateJSON struct {
+	PartID   int64  `json:"partId,omitempty"`
+	UploadID string `json:"uploadId,omitempty"`
+	Name     string `json:"name"`
+	Size     int64  `json:"size,omitempty"`
+	Missing  bool   `json:"missing,omitempty"`
+}
+
+func (a *API) jobsUC() app.Jobs { return app.Jobs{Store: a.Store, Files: a.Plates} }
+
+func (a *API) jobs(w http.ResponseWriter, r *http.Request) {
+	js, err := a.jobsUC().List(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	out := make([]jobSummaryJSON, 0, len(js))
+	for _, j := range js {
+		out = append(out, jobSummaryJSON{j.ID, j.Name, j.State, j.Items, j.Copies, j.Plates, j.CreatedUnix, j.PrintedUnix})
+	}
+	writeJSON(w, out)
+}
+
+func (a *API) createJob(w http.ResponseWriter, r *http.Request) {
+	var body struct{ Name, Note string }
+	if !readJSON(w, r, &body) {
+		return
+	}
+	id, err := a.jobsUC().Create(r.Context(), body.Name, body.Note)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]int64{"id": id})
+}
+
+func (a *API) job(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	j, err := a.jobsUC().Get(r.Context(), id)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	out := jobJSON{ID: j.ID, Name: j.Name, Note: j.Note, State: j.State, CreatedUnix: j.CreatedUnix, PrintedUnix: j.PrintedUnix,
+		Items: []jobItemJSON{}, Plates: []jobPlateJSON{}}
+	for _, it := range j.Items {
+		out.Items = append(out.Items, jobItemJSON{it.PartID, it.Path, path.Base(it.Path), it.ModelID, it.ModelName, it.Count, it.Missing})
+	}
+	for _, p := range j.Plates {
+		out.Plates = append(out.Plates, jobPlateJSON{p.PartID, p.UploadID, p.Name, p.Size, p.Missing})
+	}
+	writeJSON(w, out)
+}
+
+func (a *API) updateJob(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	var body struct{ Name, Note, State string }
+	if !ok || !readJSON(w, r, &body) {
+		return
+	}
+	if err := a.jobsUC().Update(r.Context(), id, body.Name, body.Note, body.State); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) deleteJob(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	if err := a.jobsUC().Delete(r.Context(), id); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) setJobItems(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	var body struct {
+		Items []struct {
+			PartID int64 `json:"partId"`
+			Count  int   `json:"count"`
+		} `json:"items"`
+	}
+	if !ok || !readJSON(w, r, &body) {
+		return
+	}
+	items := make([]app.SliceItem, 0, len(body.Items))
+	for _, it := range body.Items {
+		items = append(items, app.SliceItem{PartID: it.PartID, Count: it.Count})
+	}
+	if err := a.jobsUC().SetItems(r.Context(), id, items); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) setJobPlates(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	var body struct {
+		Plates []struct {
+			PartID   int64  `json:"partId"`
+			UploadID string `json:"uploadId"`
+		} `json:"plates"`
+	}
+	if !ok || !readJSON(w, r, &body) {
+		return
+	}
+	plates := make([]app.PlateRef, 0, len(body.Plates))
+	for _, p := range body.Plates {
+		plates = append(plates, app.PlateRef{PartID: p.PartID, UploadID: p.UploadID})
+	}
+	if err := a.jobsUC().SetPlates(r.Context(), id, plates); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// uploadPlate takes a sliced file as multipart/form-data (field "file"),
+// streamed to disk, and stores it in the app's data - not in the library.
+func (a *API) uploadPlate(w http.ResponseWriter, r *http.Request) {
+	mr, err := r.MultipartReader()
+	if err != nil {
+		http.Error(w, "expected multipart/form-data", http.StatusBadRequest)
+		return
+	}
+	for {
+		part, err := mr.NextPart()
+		if err != nil {
+			http.Error(w, "no file in the upload", http.StatusBadRequest)
+			return
+		}
+		if part.FormName() != "file" || part.FileName() == "" {
+			continue
+		}
+		u, err := a.jobsUC().UploadPlate(r.Context(), part.FileName(), part)
+		if err != nil {
+			if errors.Is(err, app.ErrTooLarge) {
+				http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
+				return
+			}
+			fail(w, err)
+			return
+		}
+		writeJSON(w, map[string]any{"id": u.ID, "name": u.Name, "size": u.Size})
+		return
+	}
+}
+
+func (a *API) downloadPlate(w http.ResponseWriter, r *http.Request) {
+	uid := r.PathValue("uid")
+	u, err := a.Store.Upload(r.Context(), uid)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	f, _, err := a.Plates.Open(r.Context(), uid)
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	defer f.Close()
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": u.Name}))
+	http.ServeContent(w, r, u.Name, time.Time{}, f)
+}
+
+func (a *API) uploadContents(w http.ResponseWriter, r *http.Request) {
+	refs, err := app.Slices{Store: a.Store}.UploadContents(r.Context(), r.PathValue("uid"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"contents": partRefs(refs)})
+}
+
+func (a *API) setUploadContents(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Items []struct {
+			PartID int64 `json:"partId"`
+			Count  int   `json:"count"`
+		} `json:"items"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	items := make([]app.SliceItem, 0, len(body.Items))
+	for _, it := range body.Items {
+		items = append(items, app.SliceItem{PartID: it.PartID, Count: it.Count})
+	}
+	if err := (app.Slices{Store: a.Store}).SetUploadContents(r.Context(), r.PathValue("uid"), items); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // editTags adds and removes tags on many models at once.
