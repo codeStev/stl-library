@@ -378,3 +378,37 @@ func TestMergeSkipsAFileThatIsInTheModelUnderAnotherVariantFolder(t *testing.T) 
 		t.Errorf("different content: %+v %v\n%s", sum, err, lib.list())
 	}
 }
+
+func TestManyDifferentFilesWithOneNameAreAllKept(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	ctx := context.Background()
+	dl := &fakeDownloads{files: []importer.File{{Rel: "nomnom/Kida/STL/75mm/k.stl", Size: 1, ModUnix: 1}}}
+	lib := &fakeLibrary{files: map[string]int64{}}
+	log := &memLog{recs: map[string]ImportRecord{}, baselined: true}
+	im := &Importer{Downloads: dl, Library: lib, Log: log, Settle: time.Hour, DeleteImported: true, Now: func() time.Time { return now }}
+	for i, content := range []string{"x", "y", "z", "w"} {
+		dl.content = content
+		dl.files = []importer.File{{Rel: "nomnom/Kida/STL/75mm/k.stl", Size: 1, ModUnix: int64(i + 1)}}
+		if sum, err := im.Run(ctx); err != nil || sum.Files != 1 {
+			t.Fatalf("content %q: %+v %v\n%s", content, sum, err, lib.list())
+		}
+	}
+	want := map[string]string{
+		"Nomnom/Kida/75mm/k.stl":              "x",
+		"Nomnom/Kida/75mm/k (imported).stl":   "y",
+		"Nomnom/Kida/75mm/k (imported 2).stl": "z",
+		"Nomnom/Kida/75mm/k (imported 3).stl": "w",
+	}
+	for p, c := range want {
+		if lib.content[p] != c {
+			t.Errorf("%s = %q, want %q\n%s", p, lib.content[p], c, lib.list())
+		}
+	}
+	// Coming again with content that is in the library already (under an
+	// alternative name) writes nothing.
+	dl.content = "z"
+	dl.files = []importer.File{{Rel: "nomnom/Kida/STL/75mm/k.stl", Size: 1, ModUnix: 9}}
+	if sum, err := im.Run(ctx); err != nil || sum.Files != 0 || sum.Removed != 1 {
+		t.Errorf("known content: %+v %v\n%s", sum, err, lib.list())
+	}
+}

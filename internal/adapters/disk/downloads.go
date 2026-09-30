@@ -107,7 +107,7 @@ func (d Downloads) Expand(ctx context.Context, unit string, files []importer.Fil
 				zr.Close()
 				return nil, fmt.Errorf("%s: unsafe entry %q", f.Rel, e.Name)
 			}
-			out = append(out, importer.File{Rel: base + "/" + name, Archive: f.Rel, Entry: e.Name,
+			out = append(out, importer.File{Rel: base + "/" + portableName(name), Archive: f.Rel, Entry: e.Name,
 				Size: int64(e.UncompressedSize64), ModUnix: f.ModUnix})
 		}
 		zr.Close()
@@ -150,6 +150,29 @@ func entryPath(name string) (string, bool) {
 		return "", false
 	}
 	return clean, true
+}
+
+// portableName replaces what common file systems (NTFS, exFAT) refuse in a
+// file name - replacement characters, control characters, non-characters,
+// "<>\"|?*" - and trailing dots or spaces of each level.
+func portableName(p string) string {
+	segs := strings.Split(p, "/")
+	for i, s := range segs {
+		s = strings.Map(func(r rune) rune {
+			switch {
+			case r == utf8.RuneError, r < 0x20, r == 0x7f, r == 0xfffe, r == 0xffff,
+				strings.ContainsRune(`<>"|?*`, r):
+				return '_'
+			}
+			return r
+		}, s)
+		s = strings.TrimRight(s, ". ")
+		if s == "" {
+			s = "_"
+		}
+		segs[i] = s
+	}
+	return strings.Join(segs, "/")
 }
 
 // Each streams files, opening every archive once.

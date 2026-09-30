@@ -218,3 +218,16 @@ func TestNonUTF8EntryNamesAreDecoded(t *testing.T) {
 		t.Errorf("read back: %q %v", got, err)
 	}
 }
+
+func TestPortableNameReplacesWhatNTFSRefuses(t *testing.T) {
+	for in, want := range map[string]string{
+		"Wicked/Alta�r/290726 Alta�r Image 001.jpg": "Wicked/Alta_r/290726 Alta_r Image 001.jpg",
+		"a/b?c*d|e.stl":  "a/b_c_d_e.stl",
+		"x/name. /f.stl": "x/name/f.stl",
+		"Altaïr/ok.jpg":  "Altaïr/ok.jpg",
+	} {
+		if got := portableName(in); got != want {
+			t.Errorf("portableName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

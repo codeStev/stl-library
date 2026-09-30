@@ -328,22 +328,42 @@ func (im *Importer) importUnit(ctx context.Context, u importer.Unit, rec *Import
 		})
 	}
 	if err == nil && len(differ) > 0 {
+		// Files whose name is taken by other content get "(imported)", "(imported 2)", ...
+		// Which slot is free (or already holds this very content) is decided by the
+		// file's hash, so the files are read once to hash them, then again to write.
+		sums := map[string]string{}
 		err = im.Downloads.Each(ctx, u.Path, differ, func(f importer.File, r io.Reader) error {
-			to := alternative(dest[f.Rel])
-			size, exists, err := im.Library.Stat(ctx, to)
-			if err != nil {
+			h := sha256.New()
+			if _, err := io.Copy(h, r); err != nil {
 				return err
 			}
-			if !exists {
-				return write(f, to, r)
-			}
-			if size == f.Size {
-				if same, err := im.sameContent(ctx, to, r); err != nil || same {
-					return err // imported before under the other name
-				}
-			}
-			return fmt.Errorf("%s and %s both exist with other content", dest[f.Rel], to)
+			sums[f.Rel] = hex.EncodeToString(h.Sum(nil))
+			return nil
 		})
+		if err == nil {
+			err = im.Downloads.Each(ctx, u.Path, differ, func(f importer.File, r io.Reader) error {
+				for n := 1; n <= maxAlternatives; n++ {
+					to := alternative(dest[f.Rel], n)
+					size, exists, err := im.Library.Stat(ctx, to)
+					if err != nil {
+						return err
+					}
+					if !exists {
+						return write(f, to, r)
+					}
+					if size == f.Size {
+						lib, err := im.Library.Hash(ctx, to)
+						if err != nil {
+							return err
+						}
+						if lib == sums[f.Rel] {
+							return nil // imported before under this name
+						}
+					}
+				}
+				return fmt.Errorf("%s: more than %d different files with that name", dest[f.Rel], maxAlternatives)
+			})
+		}
 	}
 	if err == nil && im.DeleteImported {
 		for _, w := range written {
@@ -452,9 +472,18 @@ func modelDirOf(target string) string {
 	return parts[0] + "/" + parts[1]
 }
 
-func alternative(p string) string {
+// maxAlternatives bounds how many different files may share one name.
+const maxAlternatives = 50
+
+// alternative is the n-th other name for a taken file name: "x (imported).stl",
+// "x (imported 2).stl", ...
+func alternative(p string, n int) string {
 	ext := path.Ext(p)
-	return strings.TrimSuffix(p, ext) + " (imported)" + ext
+	tag := " (imported)"
+	if n > 1 {
+		tag = fmt.Sprintf(" (imported %d)", n)
+	}
+	return strings.TrimSuffix(p, ext) + tag + ext
 }
 
 func fold(s string) string {

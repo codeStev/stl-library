@@ -161,7 +161,7 @@ func (d Downloads) expandExternal(ctx context.Context, unit string, f importer.F
 	base := importer.ArchiveBase(f.Rel)
 	var out []importer.File
 	for _, e := range entries {
-		out = append(out, importer.File{Rel: base + "/" + e.Name, Archive: f.Rel, Entry: e.Name, Size: e.Size, ModUnix: f.ModUnix})
+		out = append(out, importer.File{Rel: base + "/" + portableName(e.Name), Archive: f.Rel, Entry: e.Name, Size: e.Size, ModUnix: f.ModUnix})
 	}
 	return out, nil
 }
