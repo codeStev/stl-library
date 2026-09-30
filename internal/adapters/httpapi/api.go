@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"log/slog"
 	"mime"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 
 	convention "github.com/codeStev/stl-convention"
 	"github.com/codeStev/stl-library/internal/app"
+	"github.com/codeStev/stl-library/internal/core/slicemeta"
 )
 
 // API serves the library index and its files.
@@ -98,6 +100,10 @@ func (a *API) Handler() http.Handler {
 	h("GET /api/plates/{uid}", full, a.downloadPlate)
 	h("GET /api/plates/{uid}/contents", full, a.uploadContents)
 	h("PUT /api/plates/{uid}/contents", full, a.setUploadContents)
+	h("GET /api/parts/{id}/slicemeta", full, a.partSliceMeta)
+	h("GET /api/parts/{id}/preview.png", full, a.partSlicePreview)
+	h("GET /api/plates/{uid}/slicemeta", full, a.uploadSliceMeta)
+	h("GET /api/plates/{uid}/preview.png", full, a.uploadSlicePreview)
 	h("GET /api/parts/{id}/contents", full, a.sliceContents)
 	h("PUT /api/parts/{id}/contents", full, a.setSliceContents)
 	h("GET /api/variants/{id}/slices", full, a.variantSlices)
@@ -723,6 +729,94 @@ func (a *API) setUploadContents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type sliceMetaJSON struct {
+	Format          string  `json:"format"`
+	Version         int     `json:"version"`
+	Layers          int     `json:"layers"`
+	LayerHeight     float32 `json:"layerHeight"`
+	ExposureS       float32 `json:"exposureS"`
+	BottomExposureS float32 `json:"bottomExposureS"`
+	BottomLayers    int     `json:"bottomLayers"`
+	PrintSeconds    int     `json:"printSeconds,omitempty"`
+	VolumeMl        float32 `json:"volumeMl,omitempty"`
+	ResX            int     `json:"resX"`
+	ResY            int     `json:"resY"`
+	BedX            float32 `json:"bedX,omitempty"`
+	BedY            float32 `json:"bedY,omitempty"`
+	BedZ            float32 `json:"bedZ,omitempty"`
+	HasPreview      bool    `json:"hasPreview"`
+}
+
+func (a *API) sliceMeta() app.SliceMeta {
+	return app.SliceMeta{Store: a.Store, Files: a.Files, Plates: a.Plates}
+}
+
+// metaFail: a file that is not a known sliced format is 422, not a server error.
+func metaFail(w http.ResponseWriter, err error) {
+	if errors.Is(err, slicemeta.ErrUnsupported) {
+		http.Error(w, "not a supported sliced file", http.StatusUnprocessableEntity)
+		return
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	fail(w, err)
+}
+
+func writeSliceMeta(w http.ResponseWriter, m *slicemeta.Meta, err error) {
+	if err != nil {
+		metaFail(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+	writeJSON(w, sliceMetaJSON{m.Format, m.Version, m.Layers, m.LayerHeight, m.ExposureS, m.BottomExposureS, m.BottomLayers,
+		m.PrintSeconds, m.VolumeMl, m.ResX, m.ResY, m.BedX, m.BedY, m.BedZ, m.HasPreview()})
+}
+
+func writeSlicePreview(w http.ResponseWriter, m *slicemeta.Meta, err error) {
+	if err != nil {
+		metaFail(w, err)
+		return
+	}
+	data, err := m.PreviewPNG()
+	if err != nil {
+		http.Error(w, "no preview", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "private, max-age=86400")
+	w.Write(data)
+}
+
+func (a *API) partSliceMeta(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	m, err := a.sliceMeta().OfPart(r.Context(), id)
+	writeSliceMeta(w, m, err)
+}
+
+func (a *API) partSlicePreview(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	m, err := a.sliceMeta().OfPart(r.Context(), id)
+	writeSlicePreview(w, m, err)
+}
+
+func (a *API) uploadSliceMeta(w http.ResponseWriter, r *http.Request) {
+	m, err := a.sliceMeta().OfUpload(r.Context(), r.PathValue("uid"))
+	writeSliceMeta(w, m, err)
+}
+
+func (a *API) uploadSlicePreview(w http.ResponseWriter, r *http.Request) {
+	m, err := a.sliceMeta().OfUpload(r.Context(), r.PathValue("uid"))
+	writeSlicePreview(w, m, err)
 }
 
 // editTags adds and removes tags on many models at once.

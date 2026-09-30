@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, formatBytes, formatDate, isSliced, uploadPlate, type Job, type JobPlate, type JobSummary } from "./api";
 import { PartPicker } from "./PartPicker";
 import { SliceEditor } from "./SliceEditor";
+import { PlateInfo } from "./PlateInfo";
 
 const PLATE_TYPES = ".ctb,.goo,.cbddlp,.photon,.pws,.chitubox,.lys,.lyt";
 
@@ -185,6 +186,7 @@ function PrintDetail({ id }: { id: number }) {
             <button className="link" onClick={() => run(api.setJobPlates(job.id, plateRefs(job.plates.filter((x) => x !== p))))} aria-label={`Remove ${p.name}`}>
               ✕
             </button>
+            {(p.uploadId || p.partId) && !p.missing && <PlateInfo kind={p.uploadId ? "upload" : "part"} id={(p.uploadId ?? p.partId) as string | number} />}
             {editing && editing.uploadId === p.uploadId && p.uploadId && (
               <SliceEditor
                 title={p.name}

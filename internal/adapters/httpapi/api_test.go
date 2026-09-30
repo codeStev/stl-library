@@ -4,12 +4,14 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"image"
 	"image/jpeg"
 	"image/png"
 	"io"
+	"math"
 	"mime/multipart"
 	"net"
 	"net/http"
@@ -1013,5 +1015,93 @@ func TestVariantMarkPrintedCountsAllItsPartsPrinted(t *testing.T) {
 		if mv.ID == v.ID && len(mv.PrintedParts) != len(mv.Parts) {
 			t.Errorf("all %d parts count as printed: %v", len(mv.Parts), mv.PrintedParts)
 		}
+	}
+}
+
+// plainCTB builds a small unencrypted .ctb (v3 layout) with a 8x4 preview.
+func plainCTB() string {
+	f := make([]byte, 1024)
+	put := func(o int, v uint32) { binary.LittleEndian.PutUint32(f[o:], v) }
+	putf := func(o int, v float32) { put(o, math.Float32bits(v)) }
+	put(0, 0x12FD0086)
+	put(4, 3)
+	putf(8, 192)
+	putf(12, 120)
+	putf(16, 245)
+	putf(32, 0.05)
+	putf(36, 2.5)
+	putf(40, 30)
+	put(48, 5)
+	put(52, 3840)
+	put(56, 2400)
+	put(60, 200)
+	put(68, 1200)
+	put(76, 7200)
+	// a preview of 8x4 pixels: red for all of it, one run
+	put(200, 8)
+	put(204, 4)
+	put(208, 240)
+	put(212, 4)
+	binary.LittleEndian.PutUint16(f[240:], 31<<11|0x20)
+	binary.LittleEndian.PutUint16(f[242:], 31)
+	return string(f)
+}
+
+func TestSliceMetaAndPreviewOfUploadedAndLibraryPlates(t *testing.T) {
+	srv := server(t)
+	code, u := upload(t, srv, "plate.ctb", plainCTB())
+	if code != 200 {
+		t.Fatalf("upload: %d %v", code, u)
+	}
+	uid := fmt.Sprint(u["id"])
+	var meta struct {
+		Format                     string
+		Layers, PrintSeconds, ResX int
+		LayerHeight                float64
+		HasPreview                 bool
+	}
+	getJSON(t, srv, "/api/plates/"+uid+"/slicemeta", &meta)
+	if meta.Format != "ctb" || meta.Layers != 1200 || meta.PrintSeconds != 7200 || meta.ResX != 3840 || meta.LayerHeight != 0.05 || !meta.HasPreview {
+		t.Errorf("meta: %+v", meta)
+	}
+	resp, data := get(t, srv, "/api/plates/"+uid+"/preview.png")
+	if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "image/png" {
+		t.Fatalf("preview: %d %v", resp.StatusCode, resp.Header)
+	}
+	img, err := png.Decode(bytes.NewReader(data))
+	if err != nil || img.Bounds().Dx() != 8 || img.Bounds().Dy() != 4 {
+		t.Errorf("preview image: %v %v", err, img)
+	}
+	// Not a sliced file: 422, not 500 - an uploaded one and a library one.
+	code, bad := upload(t, srv, "fake.ctb", strings.Repeat("not a plate ", 20))
+	if code != 200 {
+		t.Fatalf("upload fake: %d", code)
+	}
+	if resp, _ := get(t, srv, "/api/plates/"+fmt.Sprint(bad["id"])+"/slicemeta"); resp.StatusCode != 422 {
+		t.Errorf("fake upload: %d", resp.StatusCode)
+	}
+	var hits []modelSummary
+	getJSON(t, srv, "/api/models?q=bell", &hits)
+	var m modelDetail
+	getJSON(t, srv, "/api/models/"+itoa(hits[0].ID), &m)
+	var lys, stl int64
+	for _, v := range m.Variants {
+		for _, p := range v.Parts {
+			if p.Name == "base.lys" {
+				lys = p.ID
+			}
+			if p.Name == "bell.stl" {
+				stl = p.ID
+			}
+		}
+	}
+	if resp, _ := get(t, srv, "/api/parts/"+itoa(lys)+"/slicemeta"); resp.StatusCode != 422 {
+		t.Errorf("a .lys project is no slice: %d", resp.StatusCode)
+	}
+	if resp, _ := get(t, srv, "/api/parts/"+itoa(stl)+"/slicemeta"); resp.StatusCode != 400 {
+		t.Errorf("an .stl has no slice data: %d", resp.StatusCode)
+	}
+	if resp, _ := get(t, srv, "/api/plates/"+strings.Repeat("b", 64)+"/slicemeta"); resp.StatusCode != 404 {
+		t.Errorf("unknown upload: %d", resp.StatusCode)
 	}
 }

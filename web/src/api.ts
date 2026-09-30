@@ -60,6 +60,28 @@ export interface Variant {
   printedParts: Record<string, number>;
 }
 
+// What a sliced file says about itself (read from its header).
+export interface SliceMeta {
+  format: string;
+  version: number;
+  layers: number;
+  layerHeight: number;
+  exposureS: number;
+  bottomExposureS: number;
+  bottomLayers: number;
+  printSeconds?: number;
+  volumeMl?: number;
+  resX: number;
+  resY: number;
+  hasPreview: boolean;
+}
+
+// "3 h 24 min" / "45 min"
+export function formatDuration(seconds: number): string {
+  const m = Math.round(seconds / 60);
+  return m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`;
+}
+
 // A "print": a named set of parts (with counts) and plates, possibly from several models.
 export interface JobSummary {
   id: number;
@@ -330,6 +352,11 @@ export const api = {
   deleteCollection: (id: number) => send("DELETE", `/api/collections/${id}`),
   editCollection: (id: number, add: number[], remove: number[]) => send("POST", `/api/collections/${id}/models`, { add, remove }),
   modelCollections: (modelId: number) => get<Collection[]>(`/api/models/${modelId}/collections`),
+  sliceMeta: async (kind: "part" | "upload", id: number | string): Promise<SliceMeta | null> => {
+    const r = await fetch(`/api/${kind === "part" ? "parts" : "plates"}/${id}/slicemeta`);
+    return r.ok ? ((await r.json()) as SliceMeta) : null; // not a readable sliced file: no details
+  },
+  slicePreviewURL: (kind: "part" | "upload", id: number | string) => `/api/${kind === "part" ? "parts" : "plates"}/${id}/preview.png`,
   jobs: () => get<JobSummary[]>("/api/jobs"),
   createJob: (name: string, note = "") => send<{ id: number }>("POST", "/api/jobs", { name, note }),
   job: (id: number) => get<Job>(`/api/jobs/${id}`),

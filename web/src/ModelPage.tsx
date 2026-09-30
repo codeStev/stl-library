@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react
 import { api, DIM_VALUES, displayName, formatBytes, formatDate, isSliced, printable, showLibrary, type DimKey, type FileRef, type Collection, type ModelDetail, type PartLink, type Tag, type Variant } from "./api";
 import { SliceEditor } from "./SliceEditor";
 import { AddToPrint } from "./AddToPrint";
+import { PlateInfo } from "./PlateInfo";
 import { TagPicker } from "./TagPicker";
 
 // three.js is large; it loads only when a 3D view is opened.
@@ -234,6 +235,7 @@ export function ModelPage({ id }: { id: number }) {
                       )}
                       {formatBytes(p.size)}
                     </span>
+                    {isSliced(p.name) && <PlateInfo kind="part" id={p.id} />}
                     {editing === p.id && (
                       <SliceEditor
                         title={p.name}
