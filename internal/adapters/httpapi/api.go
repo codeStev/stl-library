@@ -135,6 +135,7 @@ func (a *API) Handler() http.Handler {
 	h("GET /api/plates/{uid}/slicemeta", full, a.uploadSliceMeta)
 	h("GET /api/plates/{uid}/preview.png", full, a.uploadSlicePreview)
 	h("GET /api/parts/{id}/contents", full, a.sliceContents)
+	h("GET /api/parts/{id}/contents/suggest", full, a.suggestSliceContents)
 	h("PUT /api/parts/{id}/contents", full, a.setSliceContents)
 	h("GET /api/variants/{id}/slices", full, a.variantSlices)
 	h("GET /api/collections", full, a.collections)
@@ -543,6 +544,20 @@ func (a *API) sliceContents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"contents": partRefs(info.Contents), "usedIn": partRefs(info.UsedIn)})
+}
+
+// suggestSliceContents proposes the parts of the model a plate probably holds, judging by file names.
+func (a *API) suggestSliceContents(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	refs, err := app.Slices{Store: a.Store}.SuggestContents(r.Context(), id)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"suggestions": partRefs(refs)})
 }
 
 // setSliceContents replaces what a sliced file contains.

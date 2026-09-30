@@ -28,3 +28,19 @@ func TestCopyOf(t *testing.T) {
 		}
 	}
 }
+
+func TestStemKeyMatchesAPlateToItsPart(t *testing.T) {
+	for _, c := range []struct{ a, b string }{
+		{"Arm_left_SUP.lys", "Arm_left.stl"},
+		{"Arm left Supported.chitubox", "arm-left.STL"},
+		{"Head_32mm_presupported.ctb", "Head.stl"},
+		{"Base (Hollow).stl", "Base.stl"},
+	} {
+		if StemKey(c.a) == "" || StemKey(c.a) != StemKey(c.b) {
+			t.Errorf("%q -> %q, %q -> %q", c.a, StemKey(c.a), c.b, StemKey(c.b))
+		}
+	}
+	if StemKey("Head_1.chitubox") == StemKey("Head.stl") || StemKey("Supported.lys") != "" {
+		t.Error("too loose")
+	}
+}

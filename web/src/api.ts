@@ -464,6 +464,7 @@ export const api = {
   uploadContents: (uploadId: string) => get<{ contents: PartLink[] }>(`/api/plates/${uploadId}/contents`),
   setUploadContents: (uploadId: string, items: { partId: number; count: number }[]) => send("PUT", `/api/plates/${uploadId}/contents`, { items }),
   sliceContents: (partId: number) => get<{ contents: PartLink[]; usedIn: PartLink[] }>(`/api/parts/${partId}/contents`),
+  suggestSliceContents: (partId: number) => get<{ suggestions: PartLink[] }>(`/api/parts/${partId}/contents/suggest`),
   setSliceContents: (partId: number, items: { partId: number; count: number }[]) =>
     send("PUT", `/api/parts/${partId}/contents`, { items }),
   variantSlices: (variantId: number) => get<{ parts: Record<string, PartLink[]> }>(`/api/variants/${variantId}/slices`),

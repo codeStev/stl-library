@@ -4,6 +4,8 @@ import (
 	"context"
 	"path"
 	"strings"
+
+	"github.com/codeStev/stl-library/internal/core/library"
 )
 
 // SliceItem says a sliced file holds Count copies of a part.
@@ -120,4 +122,57 @@ func (s Slices) SetUploadContents(ctx context.Context, uploadID string, items []
 // VariantCoverage lists, for each part of a variant, the sliced files it is in.
 func (s Slices) VariantCoverage(ctx context.Context, variantID int64) (map[int64][]PartRef, error) {
 	return s.Store.VariantSlices(ctx, variantID)
+}
+
+// SuggestContents proposes the parts a sliced file or slicer project holds, from its file name: parts of the
+// same model whose name, without supports/slicer words and scale, is the same ("Arm_left_SUP.lys" holds
+// "Arm_left.stl"). Parts in the plate's own variant come first and, when there are any, are the only ones
+// returned. Nothing is saved: the user confirms in the editor. (The slicers' files don't carry part names
+// in a readable form; .ctb has none at all.)
+func (s Slices) SuggestContents(ctx context.Context, plateID int64) ([]PartRef, error) {
+	plate, err := s.Store.Part(ctx, plateID)
+	if err != nil {
+		return nil, err
+	}
+	key := library.StemKey(path.Base(plate.Path))
+	if !IsSliced(plate.Path) || key == "" {
+		return []PartRef{}, nil
+	}
+	vid, err := s.Store.PartVariant(ctx, plateID)
+	if err != nil {
+		return nil, err
+	}
+	v, err := s.Store.Variant(ctx, vid)
+	if err != nil {
+		return nil, err
+	}
+	m, err := s.Store.Model(ctx, v.ModelID)
+	if err != nil {
+		return nil, err
+	}
+	name := m.Name
+	if m.DisplayName != "" {
+		name = m.DisplayName
+	}
+	var same, other []PartRef
+	for _, mv := range m.Variants {
+		for _, p := range mv.Parts {
+			if p.ID == plateID || IsSliced(p.Path) || library.StemKey(path.Base(p.Path)) != key {
+				continue
+			}
+			ref := PartRef{PartID: p.ID, Path: p.Path, ModelID: m.ID, ModelName: name, Count: 1}
+			if mv.ID == vid {
+				same = append(same, ref)
+			} else {
+				other = append(other, ref)
+			}
+		}
+	}
+	if len(same) > 0 {
+		return same, nil
+	}
+	if other == nil {
+		other = []PartRef{}
+	}
+	return other, nil
 }

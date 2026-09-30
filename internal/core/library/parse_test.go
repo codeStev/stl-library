@@ -209,18 +209,21 @@ func TestSuggestedSpellingOfVariantFolders(t *testing.T) {
 		"hollow":               "Hollow",
 		"STL files":            "STL",
 		"Pre-Supported Lychee": "Supported Lychee",
-		// not suggested: already canonical, names with other words, more than one level, conflicting words
+		// a name that says several things is split into the canonical levels
+		"32mm_Supported":       "32mm/Supported",
+		"Supported 75mm Solid": "75mm/Supported/Solid",
+		// not suggested: already canonical, names with other words, conflicting words
 		"Supported":             "",
 		"No Supports":           "",
 		"Dragon Solid":          "",
 		"Solid Snake":           "",
 		"Hollow Knight":         "",
-		"32mm_Supported":        "",
 		"Supported Unsupported": "",
 		"lys stl":               "",
 		"":                      "",
 	} {
-		got, ok := suggestSegment(name)
+		segs, ok := suggestSegment(name)
+		got := strings.Join(segs, "/")
 		if got != want || ok != (want != "") {
 			t.Errorf("suggestSegment(%q) = %q, %v; want %q", name, got, ok, want)
 		}
@@ -233,6 +236,7 @@ func TestSuggestRenamesOneLevelAndCountsTheIssuesItClears(t *testing.T) {
 		"Creator/Rel/Model/Unsupported/Head",
 		"Creator/Rel/Other/Presupported",
 		"Creator/Rel/Dragon Solid/Supported",
+		"Creator/Rel/Third/Supported_32mm",
 		"Unsupported", // a creator-level folder is never renamed
 	})
 	var got []string
@@ -242,6 +246,7 @@ func TestSuggestRenamesOneLevelAndCountsTheIssuesItClears(t *testing.T) {
 	check(t, got, []string{
 		"Creator/Rel/Model/Unsupported -> Creator/Rel/Model/No Supports x2",
 		"Creator/Rel/Other/Presupported -> Creator/Rel/Other/Supported x1",
+		"Creator/Rel/Third/Supported_32mm -> Creator/Rel/Third/32mm/Supported x1",
 	})
 }
 

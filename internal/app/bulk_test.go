@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"strings"
+
+	"github.com/codeStev/stl-library/internal/core/library"
 	"testing"
 )
 
@@ -141,5 +143,33 @@ func TestBulkRejectsBadNamesAndEmptyEdits(t *testing.T) {
 	rows, _ = b.Plan(context.Background(), BulkEdit{IDs: []int64{1}, Find: "Mercy 2", Replace: ""})
 	if rows[0].Problem == "" {
 		t.Error("an empty name was planned")
+	}
+}
+
+type issueStore struct {
+	bulkStore
+	issues []library.Issue
+}
+
+func (s *issueStore) Issues(context.Context) ([]library.Issue, error) { return s.issues, nil }
+
+func TestFixSplitsAFolderIntoCanonicalLevelsAndCarriesItsData(t *testing.T) {
+	st := &issueStore{issues: []library.Issue{{Dir: "C/R/M/Supported_32mm"}}}
+	ed := &fakeEditor{dirs: map[string]bool{"C/R/M/Supported_32mm": true}}
+	keys := &fakeKeys{}
+	fx := Fixes{Store: st, Editor: ed, Keys: keys}
+	ctx := context.Background()
+	sug, err := fx.Suggestions(ctx)
+	if err != nil || len(sug) != 1 || sug[0].To != "C/R/M/32mm/Supported" {
+		t.Fatalf("%+v %v", sug, err)
+	}
+	if _, err := fx.Apply(ctx, "C/R/M/Supported_32mm", "C/R/Other/32mm/Supported"); !errors.Is(err, ErrInvalid) {
+		t.Errorf("a target outside the parent: %v", err)
+	}
+	if _, err := fx.Apply(ctx, "C/R/M/Supported_32mm", "C/R/M/32mm/Supported"); err != nil {
+		t.Fatal(err)
+	}
+	if !ed.dirs["C/R/M/32mm/Supported"] || len(keys.moved) != 1 || len(st.fixes) != 1 {
+		t.Errorf("%v %v %v", ed.dirs, keys.moved, st.fixes)
 	}
 }

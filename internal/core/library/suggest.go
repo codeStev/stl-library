@@ -9,8 +9,9 @@ import (
 )
 
 // Fix is a suggested rename of one folder to its canonical spelling ("Unsupported" ->
-// "No Supports"). From and To are paths relative to the library root; To differs from From in the last
-// level only.
+// "No Supports"), or - when its name says several things at once - a split into the canonical levels
+// ("Supported_32mm" -> "32mm/Supported"). From and To are paths relative to the library root; both lie
+// below the same parent folder.
 type Fix struct {
 	From, To string
 	Issues   int // how many folders of the issue list it would clear
@@ -32,14 +33,15 @@ var (
 )
 
 // suggestSegment spells one folder name the canonical way - but only when every word of it is a
-// known variant word and the result is exactly one folder level.
-func suggestSegment(name string) (string, bool) {
+// known variant word. The result is one folder level, or several when the name holds several
+// dimensions ("Supported 32mm" -> "32mm", "Supported").
+func suggestSegment(name string) ([]string, bool) {
 	if _, ok := convention.ParseSegment(name); ok {
-		return "", false // already canonical
+		return nil, false // already canonical
 	}
 	words := strings.Fields(reWords.ReplaceAllString(strings.ToLower(name), " "))
 	if len(words) == 0 {
-		return "", false
+		return nil, false
 	}
 	var d convention.Dims
 	setSupports := func(v string) bool {
@@ -58,47 +60,47 @@ func suggestSegment(name string) (string, bool) {
 		switch {
 		case two != "" && supported[two]:
 			if !setSupports("Supported") {
-				return "", false
+				return nil, false
 			}
 			i++
 		case two != "" && unsupported[two]:
 			if !setSupports("No Supports") {
-				return "", false
+				return nil, false
 			}
 			i++
 		case supported[w]:
 			if !setSupports("Supported") {
-				return "", false
+				return nil, false
 			}
 		case unsupported[w]:
 			if !setSupports("No Supports") {
-				return "", false
+				return nil, false
 			}
 		case formats[w] != "":
 			if d.Format != "" && d.Format != formats[w] {
-				return "", false
+				return nil, false
 			}
 			d.Format = formats[w]
 		case fills[w] != "":
 			if d.Fill != "" && d.Fill != fills[w] {
-				return "", false
+				return nil, false
 			}
 			d.Fill = fills[w]
 		case reMM.MatchString(w):
 			if d.Scale != "" && d.Scale != w {
-				return "", false
+				return nil, false
 			}
 			d.Scale = w
 		case fillers[w]:
 		default:
-			return "", false // a word that is not about the variant: probably a name
+			return nil, false // a word that is not about the variant: probably a name
 		}
 	}
 	segs := convention.CanonicalSegments(d)
-	if len(segs) != 1 || segs[0] == name {
-		return "", false
+	if len(segs) == 0 || (len(segs) == 1 && segs[0] == name) {
+		return nil, false
 	}
-	return segs[0], true
+	return segs, true
 }
 
 // Suggest proposes renames that would bring the folders of the issue list into line: each folder
@@ -115,7 +117,7 @@ func Suggest(issueDirs []string) []Fix {
 			from := strings.Join(segs[:i+1], "/")
 			f := found[from]
 			if f == nil {
-				f = &Fix{From: from, To: strings.Join(segs[:i], "/") + "/" + to}
+				f = &Fix{From: from, To: strings.Join(segs[:i], "/") + "/" + strings.Join(to, "/")}
 				found[from] = f
 			}
 			f.Issues++

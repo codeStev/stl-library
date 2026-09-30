@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"path"
+	"strings"
 	"time"
 
 	"github.com/codeStev/stl-library/internal/core/library"
@@ -16,12 +17,11 @@ type FixRecord struct {
 	Undone   bool
 }
 
-// LibraryEditor renames folders of the library. It is the only way the app ever changes the
-// library, and only ever one folder name at a time.
+// LibraryEditor renames and moves folders of the library. With the cleanup of leftovers and the
+// importer's new files, it is the only way the app ever changes the library - and only for changes the
+// user confirmed.
 type LibraryEditor interface {
 	Stat(ctx context.Context, rel string) (size int64, exists bool, err error)
-	// Rename renames a folder within its parent; it refuses to replace anything.
-	Rename(ctx context.Context, from, to string) error
 	// Move moves a folder to another parent and/or name, creating the parent folders; it refuses to
 	// replace anything.
 	Move(ctx context.Context, from, to string) error
@@ -117,10 +117,11 @@ func (f Fixes) Apply(ctx context.Context, from, to string) (int64, error) {
 	for _, s := range sug {
 		ok = ok || (s.From == from && s.To == to)
 	}
-	if !ok || path.Dir(from) != path.Dir(to) {
+	if !ok || !strings.HasPrefix(to, path.Dir(from)+"/") {
 		return 0, ErrInvalid
 	}
-	if err := f.Editor.Rename(ctx, from, to); err != nil {
+	// a rename, or a split into the canonical levels below the same parent
+	if err := f.Editor.Move(ctx, from, to); err != nil {
 		return 0, err
 	}
 	if err := f.follow(ctx, from, to); err != nil {

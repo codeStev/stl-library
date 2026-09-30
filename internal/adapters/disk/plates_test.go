@@ -50,7 +50,7 @@ func TestPlateStoreSavesOnceByContentAndRefusesTooMuch(t *testing.T) {
 	}
 }
 
-func TestLibraryRenameIsCarefulWithFolders(t *testing.T) {
+func TestLibraryMoveIsCarefulWithFolders(t *testing.T) {
 	root := t.TempDir()
 	for _, d := range []string{"A/B/Presupported", "A/B/Supported", "A/C"} {
 		os.MkdirAll(root+"/"+d, 0o755)
@@ -59,7 +59,6 @@ func TestLibraryRenameIsCarefulWithFolders(t *testing.T) {
 	w := LibraryWriter{Root: root}
 	ctx := context.Background()
 	for name, c := range map[string][2]string{
-		"another parent":  {"A/B/Presupported", "A/C/Presupported"},
 		"onto a folder":   {"A/B/Presupported", "A/B/Supported"},
 		"a file":          {"A/B/file.txt", "A/B/renamed.txt"},
 		"same name":       {"A/B/Presupported", "A/B/Presupported"},
@@ -67,11 +66,11 @@ func TestLibraryRenameIsCarefulWithFolders(t *testing.T) {
 		"missing source":  {"A/B/Nope", "A/B/Other"},
 		"absolute path":   {"/etc", "/etc2"},
 	} {
-		if err := w.Rename(ctx, c[0], c[1]); err == nil {
+		if err := w.Move(ctx, c[0], c[1]); err == nil {
 			t.Errorf("%s: must be refused", name)
 		}
 	}
-	if err := w.Rename(ctx, "A/B/Presupported", "A/B/No Supports"); err != nil {
+	if err := w.Move(ctx, "A/B/Presupported", "A/B/No Supports"); err != nil {
 		t.Fatalf("a plain rename works: %v", err)
 	}
 	if _, err := os.Stat(root + "/A/B/No Supports"); err != nil {

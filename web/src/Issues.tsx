@@ -54,20 +54,20 @@ export function Issues({ admin = false }: { admin?: boolean }) {
             Suggested fixes <span className="count">{fixes.suggestions.length}</span>
           </summary>
           <p className="muted">
-            Renames of one folder to its canonical spelling, only where every word of the name is understood. Nothing happens until you apply one;
-            each can be undone below.
+            Folders renamed to their canonical spelling (or split into the canonical levels, like “Supported_32mm” into 32mm / Supported), only where every word
+            of the name is understood. Nothing happens until you apply one; each can be undone below. Moves from “move / rename” in the library are listed there too.
             {!fixes.canApply && " (This server cannot change the library.)"}
           </p>
           <ul>
             {fixes.suggestions.slice(0, 100).map((s) => (
               <li key={s.from}>
-                <code>{s.from}</code> → <code>{s.to.split("/").pop()}</code>
+                <code>{s.from}</code> → <code>{shown(s.from, s.to)}</code>
                 <span className="reason">clears {s.issues} folder{s.issues === 1 ? "" : "s"}</span>
                 {admin && fixes.canApply && (
                   <button
                     className="link"
                     onClick={() => {
-                      if (confirm(`Rename\n${s.from}\nto\n${s.to.split("/").pop()}?`)) runFix(api.applyFix(s.from, s.to), "Renamed.");
+                      if (confirm(`Change\n${s.from}\nto\n${shown(s.from, s.to)}?`)) runFix(api.applyFix(s.from, s.to), "Done.");
                     }}
                   >
                     Apply
@@ -87,7 +87,7 @@ export function Issues({ admin = false }: { admin?: boolean }) {
           <ul>
             {fixes.journal.map((j) => (
               <li key={j.id} className={j.undone ? "undone" : ""}>
-                <code>{j.from}</code> → <code>{j.to.split("/").pop()}</code>
+                <code>{j.from}</code> → <code>{shown(j.from, j.to)}</code>
                 <span className="reason">{formatDate(j.atUnix)}{j.undone ? " · undone" : ""}</span>
                 {admin && !j.undone && (
                   <button className="link" onClick={() => runFix(api.undoFix(j.id), "Undone.")}>
@@ -119,4 +119,10 @@ export function Issues({ admin = false }: { admin?: boolean }) {
       ))}
     </div>
   );
+}
+
+// The new path as far as it differs from where the folder was: the part below the same parent, or all of it after a move elsewhere.
+function shown(from: string, to: string) {
+  const parent = from.slice(0, Math.max(0, from.lastIndexOf("/")));
+  return to.startsWith(parent + "/") ? to.slice(parent.length + 1) : to;
 }

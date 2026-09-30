@@ -250,6 +250,7 @@ export function ModelPage({ id }: { id: number }) {
                         title={p.name}
                         load={() => api.sliceContents(p.id)}
                         save={(items) => api.setSliceContents(p.id, items)}
+                        suggest={() => api.suggestSliceContents(p.id).then((r) => r.suggestions)}
                         model={m}
                         onSaved={() => {
                           setLinkTick((n) => n + 1);

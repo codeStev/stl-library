@@ -19,6 +19,7 @@ export function SliceEditor({
   title,
   load,
   save,
+  suggest,
   model,
   onSaved,
   onCancel,
@@ -26,6 +27,8 @@ export function SliceEditor({
   title: string;
   load: () => Promise<{ contents: PartLink[]; usedIn?: PartLink[] }>;
   save: (items: { partId: number; count: number }[]) => Promise<unknown>;
+  // Parts the file probably holds, judging by file names (optional; nothing is saved by asking).
+  suggest?: () => Promise<PartLink[]>;
   model?: ModelDetail;
   onSaved: () => void;
   onCancel: () => void;
@@ -33,6 +36,7 @@ export function SliceEditor({
   const [rows, setRows] = useState<Row[] | null>(null);
   const [usedIn, setUsedIn] = useState<PartLink[]>([]);
   const [error, setError] = useState("");
+  const [hint, setHint] = useState("");
 
   useEffect(() => {
     load().then(
@@ -88,6 +92,26 @@ export function SliceEditor({
               </option>
             ))}
           </select>
+        </div>
+      )}
+      {suggest && (
+        <div className="slice-add">
+          <button
+            className="link"
+            onClick={() =>
+              suggest().then(
+                (found) => {
+                  const fresh = found.filter((p) => p.partId && !has(p.partId));
+                  fresh.forEach((p) => addFile({ id: p.partId as number, name: p.name, size: 0 }, p.modelName ?? "", 1));
+                  setHint(found.length === 0 ? "No part with a matching file name." : fresh.length === 0 ? "They are in the list already." : `Added ${fresh.length} by file name - check, then save.`);
+                },
+                (e) => setError(String(e)),
+              )
+            }
+          >
+            Suggest from file names
+          </button>
+          {hint && <span className="muted"> {hint}</span>}
         </div>
       )}
       <PartPicker
