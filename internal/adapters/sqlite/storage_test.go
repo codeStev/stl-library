@@ -78,3 +78,47 @@ func TestMergedDuplicatesCountAsOneCopyWhileTheyStayUnchanged(t *testing.T) {
 		t.Errorf("after change: %d", total)
 	}
 }
+
+func TestSetVariantsListsTheModelFilesOfModelsWithSeveralVariants(t *testing.T) {
+	s := open(t)
+	if _, err := sync(s, libraryV1...); err != nil {
+		t.Fatal(err)
+	}
+	vs, err := s.SetVariants(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vs) != 2 || vs[0].Key != vs[1].Key || vs[0].Supports == vs[1].Supports || len(vs[0].Files) != 1 || len(vs[1].Files) != 1 {
+		t.Errorf("variants %+v", vs)
+	}
+}
+
+func TestCorruptEventsSayWhereTheGoodContentIsAndMetaKeepsValues(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	if _, err := sync(s, libraryV1...); err != nil {
+		t.Fatal(err)
+	}
+	a, b := "Loot Studios/Abyssal Haze/Enemies/Bell Head/32mm/Supported/bell.stl", "Loot Studios/Abyssal Haze/Enemies/Bell Head/32mm/No Supports/bell.stl"
+	for _, p := range []string{a, b} {
+		if _, err := s.db.Exec(`INSERT INTO file_hash (path, size, mod_unix, sha256, hashed_unix, verified_unix) VALUES (?, 10, 1, 'abc', 1, 1)`, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.db.Exec(`INSERT INTO health_event (kind, path, detail, at_unix) VALUES ('corrupt', ?, 'x', 1)`, a); err != nil {
+		t.Fatal(err)
+	}
+	es, err := s.HealthEvents(ctx, "corrupt")
+	if err != nil || len(es) != 1 || len(es[0].OtherCopies) != 1 || es[0].OtherCopies[0] != b {
+		t.Fatalf("events %+v %v", es, err)
+	}
+	if _, ok, _ := s.Meta(ctx, "k"); ok {
+		t.Error("unset key found")
+	}
+	if err := s.SetMeta(ctx, "k", "v"); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok, _ := s.Meta(ctx, "k"); !ok || v != "v" {
+		t.Errorf("meta %q %v", v, ok)
+	}
+}

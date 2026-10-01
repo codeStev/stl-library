@@ -20,8 +20,10 @@ const (
 	EventAccountRegistered = "account.registered"
 )
 
+// (EventDigest, the weekly summary, is in digest.go.)
+
 // AllEvents in display order.
-var AllEvents = []string{EventPrintDone, EventPrintStopped, EventPrintError, EventImportDone, EventImportFailed, EventAccountRegistered}
+var AllEvents = []string{EventPrintDone, EventPrintStopped, EventPrintError, EventImportDone, EventImportFailed, EventAccountRegistered, EventDigest}
 
 // Notification is one message.
 type Notification struct {

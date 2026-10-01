@@ -53,6 +53,8 @@ type HealthEvent struct {
 	Path   string
 	Detail string
 	AtUnix int64
+	// OtherCopies (for "corrupt") are other library files with the content the file had.
+	OtherCopies []string
 }
 
 // HealthCounts says how far the hashing is.

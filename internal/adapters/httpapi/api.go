@@ -42,6 +42,8 @@ type API struct {
 	Tidy       *app.Tidy
 	review     *app.PreviewReview
 	reviewOnce sync.Once
+	// Backup says when the library was last backed up (nil: not configured).
+	Backup *app.BackupStatus
 	// Linker merges duplicate files into hard links; nil when the library can't be changed.
 	Linker app.Linker
 	// Importer is set when importing from a downloads folder is on.
@@ -115,6 +117,7 @@ func (a *API) Handler() http.Handler {
 	h("POST /api/health/pause", admin, a.healthPause)
 	h("POST /api/health/events/{id}/dismiss", admin, a.dismissHealthEvent)
 	h("GET /api/duplicates", full, a.duplicates)
+	h("GET /api/set-gaps", full, a.setGaps)
 	h("POST /api/duplicates/merge", admin, a.mergeDuplicates)
 	h("POST /api/bulk/plan", admin, a.bulkPlan)
 	h("POST /api/bulk/apply", admin, a.bulkApply)
@@ -1287,12 +1290,14 @@ type healthEventJSON struct {
 	Path   string `json:"path"`
 	Detail string `json:"detail"`
 	AtUnix int64  `json:"atUnix,omitempty"`
+	// OtherCopies: files in the library with the content a damaged file had.
+	OtherCopies []string `json:"otherCopies,omitempty"`
 }
 
 func healthEvents(es []app.HealthEvent) []healthEventJSON {
 	out := make([]healthEventJSON, 0, len(es))
 	for _, e := range es {
-		out = append(out, healthEventJSON{e.ID, e.Path, e.Detail, e.AtUnix})
+		out = append(out, healthEventJSON{e.ID, e.Path, e.Detail, e.AtUnix, e.OtherCopies})
 	}
 	return out
 }
@@ -1318,7 +1323,9 @@ func (a *API) health(w http.ResponseWriter, r *http.Request) {
 	if a.Health != nil {
 		st = a.Health.State()
 	}
+	bk := a.Backup.Info()
 	writeJSON(w, map[string]any{
+		"backup":  map[string]any{"configured": bk.Configured, "lastUnix": bk.LastUnix, "overdue": bk.Overdue, "error": bk.Error},
 		"enabled": a.Health != nil,
 		"files":   counts.Files, "hashed": counts.Hashed,
 		"running": st.Running, "paused": st.Paused, "current": st.Current, "done": st.Done, "errors": st.Errors,
@@ -1398,6 +1405,42 @@ func (a *API) duplicates(w http.ResponseWriter, r *http.Request) {
 		out = append(out, gj)
 	}
 	writeJSON(w, map[string]any{"total": total, "wastedOnPage": wasted, "canMerge": a.Linker != nil, "groups": out})
+}
+
+// setGaps lists models whose supported and unsupported variants (otherwise alike) hold different numbers of files.
+func (a *API) setGaps(w http.ResponseWriter, r *http.Request) {
+	sr, ok := a.Store.(app.SetReader)
+	if !ok {
+		http.Error(w, "not available", http.StatusConflict)
+		return
+	}
+	vs, err := sr.SetVariants(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	type side struct {
+		Label string `json:"label"`
+		Files int    `json:"files"`
+	}
+	type gap struct {
+		ModelID   int64    `json:"modelId"`
+		ModelName string   `json:"modelName"`
+		Sides     []side   `json:"sides"`
+		Missing   []string `json:"missing"`
+	}
+	out := []gap{}
+	for _, g := range app.FindSetGaps(vs) {
+		gj := gap{ModelID: g.ModelID, ModelName: g.ModelName, Sides: []side{}, Missing: g.Missing}
+		if gj.Missing == nil {
+			gj.Missing = []string{}
+		}
+		for _, s := range g.Sides {
+			gj.Sides = append(gj.Sides, side{s.Label, s.Files})
+		}
+		out = append(out, gj)
+	}
+	writeJSON(w, out)
 }
 
 // mergeDuplicates keeps one copy of a duplicate group and turns the others into hard links to it.

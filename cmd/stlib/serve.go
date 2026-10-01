@@ -98,6 +98,13 @@ func serve(ctx context.Context, root, data, listen string, every time.Duration, 
 		api.Importer = importer
 		go importLoop(ctx, importer, notifications, imp.every, scanStatus)
 	}
+	backup := backupFromEnv()
+	api.Backup = backup
+	digest := &app.Digest{Source: store, Backup: backup, Meta: store, Notes: notifications}
+	if imp != nil {
+		digest.Imports = store
+	}
+	go digestLoop(ctx, digest)
 	go scanLoop(ctx, disk.Lister{Root: root}, store, thumbs, every, scanStatus, health)
 
 	errc := make(chan error, 1)
@@ -116,6 +123,44 @@ func serve(ctx context.Context, root, data, listen string, every time.Duration, 
 		return err
 	}
 	return nil
+}
+
+// backupFromEnv reads BACKUP_MARKER (a file the backup job touches when done, or the backup folder)
+// and BACKUP_MAX_AGE (default 168h, a week); nil when no marker is set.
+func backupFromEnv() *app.BackupStatus {
+	marker := os.Getenv("BACKUP_MARKER")
+	if marker == "" {
+		return nil
+	}
+	maxAge := 7 * 24 * time.Hour
+	if v := os.Getenv("BACKUP_MAX_AGE"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			maxAge = d
+		} else {
+			slog.Warn("BACKUP_MAX_AGE is not a duration, using 168h", "value", v)
+		}
+	}
+	return &app.BackupStatus{Marker: marker, MaxAge: maxAge, ModTime: func(p string) (time.Time, error) {
+		fi, err := os.Stat(p)
+		if err != nil {
+			return time.Time{}, err
+		}
+		return fi.ModTime(), nil
+	}}
+}
+
+// digestLoop checks every hour whether the weekly digest is due.
+func digestLoop(ctx context.Context, d *app.Digest) {
+	for {
+		if _, err := d.Tick(ctx); err != nil && ctx.Err() == nil {
+			slog.Warn("weekly digest", "err", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Hour):
+		}
+	}
 }
 
 // importLoop imports new downloads every interval; when something was

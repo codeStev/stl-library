@@ -174,6 +174,7 @@ export const EVENT_LABELS: Record<string, string> = {
   "import.done": "New models were imported",
   "import.failed": "An import needs attention",
   "account.registered": "Someone created an account",
+  "digest.weekly": "Weekly summary (new models, imports, damaged files, backup)",
 };
 
 export const printable = (name: string) => /\.(ctb|goo)$/i.test(name);
@@ -399,6 +400,7 @@ export const api = {
   healthRun: () => send("POST", "/api/health/run"),
   healthPause: () => send("POST", "/api/health/pause"),
   dismissHealthEvent: (id: number) => send("POST", `/api/health/events/${id}/dismiss`),
+  setGaps: () => get<SetGap[]>("/api/set-gaps"),
   mergeDuplicates: (g: { sha256: string; size: number }, keepPart: number) =>
     send<{ merged: number; error?: string }>("POST", "/api/duplicates/merge", { sha256: g.sha256, size: g.size, keepPart }),
   duplicates: (minKB: number, offset: number) => get<DuplicatePage>(`/api/duplicates?min=${minKB}&limit=25&offset=${offset}`),
@@ -535,8 +537,10 @@ export interface HealthEvent {
   path: string;
   detail: string;
   atUnix?: number;
+  otherCopies?: string[];
 }
 export interface HealthState {
+  backup: { configured: boolean; lastUnix: number; overdue: boolean; error?: string };
   enabled: boolean;
   files: number;
   hashed: number;
@@ -553,6 +557,12 @@ export interface DuplicateGroup {
   size: number;
   wasted: number;
   files: { partId: number; path: string; modelId: number; modelName: string; linked?: boolean }[];
+}
+export interface SetGap {
+  modelId: number;
+  modelName: string;
+  sides: { label: string; files: number }[];
+  missing: string[];
 }
 export interface DuplicatePage {
   total: number;

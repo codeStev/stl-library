@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Storage } from "./Storage";
-import { api, formatBytes, formatDate, type DuplicateGroup, type HealthState, type TidyItem, type TidyState } from "./api";
+import { api, formatBytes, formatDate, type DuplicateGroup, type SetGap, type HealthState, type TidyItem, type TidyState } from "./api";
 
 // The health page: how far the background hashing is, files that are in the library twice (same content),
 // files whose content changed on their own, and files that are gone.
@@ -42,6 +42,23 @@ export function Health({ admin }: { admin: boolean }) {
       </section>
 
       <section>
+        <h2>Backup</h2>
+        {!h.backup.configured ? (
+          <p className="muted">
+            Not set up. Let your backup job touch a file when it is done (or point at the backup folder) and set <code>BACKUP_MARKER</code> to it; this page and the
+            weekly summary then say when the last backup was and warn when it is overdue (<code>BACKUP_MAX_AGE</code>, default 168h).
+          </p>
+        ) : h.backup.error ? (
+          <p className="error">{h.backup.error}</p>
+        ) : (
+          <p className={h.backup.overdue ? "error" : "muted"}>
+            Last backup: {formatDate(h.backup.lastUnix)}
+            {h.backup.overdue ? " - overdue!" : ""}
+          </p>
+        )}
+      </section>
+
+      <section>
         <h2>Damaged files ({h.corrupt.length})</h2>
         {h.corrupt.length === 0 ? (
           <p className="muted">None found.</p>
@@ -54,6 +71,11 @@ export function Health({ admin }: { admin: boolean }) {
                   {e.detail}
                   {e.atUnix ? ` (${formatDate(e.atUnix)})` : ""}
                 </span>
+                {e.otherCopies && e.otherCopies.length > 0 ? (
+                  <span className="muted"> · the good content is also in: {e.otherCopies.join(", ")}</span>
+                ) : (
+                  <span className="error"> · no other copy in the library{h.backup.configured ? " - restore it from your backup" : ""}</span>
+                )}
                 {admin && e.id && (
                   <button className="link" onClick={() => act(api.dismissHealthEvent(e.id as number))}>
                     dismiss
@@ -84,8 +106,38 @@ export function Health({ admin }: { admin: boolean }) {
 
       <Leftovers admin={admin} />
 
+      <SetGaps />
+
       <Duplicates admin={admin} />
     </div>
+  );
+}
+
+// Models whose supported and unsupported variants (otherwise the same) hold a different number of files.
+function SetGaps() {
+  const [gaps, setGaps] = useState<SetGap[] | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    api.setGaps().then(setGaps, (e) => setError(String(e)));
+  }, []);
+  return (
+    <section>
+      <h2>Models with an incomplete set{gaps ? ` (${gaps.length})` : ""}</h2>
+      <p className="muted">
+        Variants that differ only in their supports should hold the same parts. Where one has fewer, a download probably lost files. The names are compared
+        ignoring words like “supported”; a different naming can show up here too.
+      </p>
+      {error && <p className="error">{error}</p>}
+      {gaps && gaps.length === 0 && <p className="muted">None found.</p>}
+      {gaps?.map((g) => (
+        <div key={g.modelId + g.sides.map((s) => s.label).join()} className="dup-group">
+          <div className="dup-head">
+            <a href={`#/model/${g.modelId}`}>{g.modelName}</a> · {g.sides.map((s) => `${s.label}: ${s.files}`).join(" · ")}
+          </div>
+          {g.missing.length > 0 && <div className="muted">No match in the others for: {g.missing.join(", ")}</div>}
+        </div>
+      ))}
+    </section>
   );
 }
 

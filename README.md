@@ -263,6 +263,8 @@ LIBRARY_ROOT=/path/to/library DATA_DIR=./data stlib serve
 | `IMPORT_SETTLE` | `1h` | how long a download folder must be unchanged to count as complete |
 | `IMPORT_TMP` | system temp | where 7z/rar archives are unpacked during an import |
 | `IMPORT_DELETE` | `false` | `true`: remove imported folders from the downloads once verified in the library |
+| `BACKUP_MARKER` | (off) | a file your backup job touches when it is done (or the backup folder); the Health page and the weekly summary show when the last backup was |
+| `BACKUP_MAX_AGE` | `168h` | how old the backup marker may get before the backup counts as overdue |
 | `APP_SECRET` | (generated) | at least 32 characters; else `DATA_DIR/secret.key` is created |
 | `PUBLIC_URL` | (off) | the address users open the app at; turns on passkeys (and Google) |
 | `OPEN_REGISTRATION` | `true` | `false`: after the first account, only admins add accounts |

@@ -2,6 +2,8 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"strings"
 
 	"github.com/codeStev/stl-library/internal/app"
@@ -164,6 +166,36 @@ func (s *Store) HealthEvents(ctx context.Context, kind string) ([]app.HealthEven
 		}
 		out = append(out, e)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	if kind == "corrupt" {
+		for i := range out {
+			if out[i].OtherCopies, err = s.otherCopies(ctx, out[i].Path); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return out, nil
+}
+
+// otherCopies lists the library files, apart from path, with the content path was hashed with.
+func (s *Store) otherCopies(ctx context.Context, path string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT h2.path FROM file_hash h JOIN file_hash h2 ON h2.sha256 = h.sha256 AND h2.path != h.path
+		JOIN part p ON p.path = h2.path WHERE h.path = ? ORDER BY h2.path LIMIT 5`, path)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
 	return out, rows.Err()
 }
 
@@ -246,4 +278,56 @@ func (s *Store) KnownHashes(ctx context.Context, sums []string) (map[string]bool
 		rows.Close()
 	}
 	return out, nil
+}
+
+// SetVariants lists every variant with its model files (STL, OBJ, 3MF), the supports apart from the rest
+// of its dimensions, so the variants of a model can be compared.
+func (s *Store) SetVariants(ctx context.Context) ([]app.SetVariant, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT m.id, `+modelName+`, v.id, v.dir, v.option, v.scale, v.supports, v.density, v.format, v.fill, v.split, v.tech, v.extra, p.path
+		FROM variant v JOIN model m ON m.id = v.model_id LEFT JOIN model_user mu ON mu.dir = m.dir
+		LEFT JOIN part p ON p.variant_id = v.id AND (lower(p.path) LIKE '%.stl' OR lower(p.path) LIKE '%.obj' OR lower(p.path) LIKE '%.3mf')
+		WHERE m.id IN (SELECT model_id FROM variant GROUP BY model_id HAVING count(*) > 1)
+		ORDER BY m.id, v.id, p.path`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []app.SetVariant
+	last := int64(-1)
+	for rows.Next() {
+		var sv app.SetVariant
+		var vid int64
+		var option, scale, supports, density, format, fill, split, tech, extra string
+		var part sql.NullString
+		if err := rows.Scan(&sv.ModelID, &sv.ModelName, &vid, &sv.Dir, &option, &scale, &supports, &density, &format, &fill, &split, &tech, &extra, &part); err != nil {
+			return nil, err
+		}
+		if vid != last {
+			last = vid
+			sv.Supports = supports
+			sv.Key = strings.Join([]string{scale, density, format, fill, split, tech, extra, option}, "|")
+			sv.Label = strings.TrimSpace(strings.Join(strings.Fields(strings.Join([]string{scale, supports, density, format, fill, split, tech, extra, option}, " ")), " "))
+			out = append(out, sv)
+		}
+		if part.Valid {
+			out[len(out)-1].Files = append(out[len(out)-1].Files, part.String)
+		}
+	}
+	return out, rows.Err()
+}
+
+// Meta returns a stored value.
+func (s *Store) Meta(ctx context.Context, key string) (string, bool, error) {
+	var v string
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = ?`, key).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	return v, err == nil, err
+}
+
+// SetMeta stores a value.
+func (s *Store) SetMeta(ctx context.Context, key, value string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value)
+	return err
 }
