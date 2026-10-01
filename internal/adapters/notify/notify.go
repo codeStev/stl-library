@@ -37,7 +37,7 @@ type Ntfy struct {
 
 var tags = map[string]string{
 	app.EventPrintDone: "white_check_mark", app.EventPrintStopped: "stop_sign", app.EventPrintError: "warning",
-	app.EventImportDone: "inbox_tray", app.EventImportFailed: "warning", app.EventAccountRegistered: "bust_in_silhouette", app.EventDigest: "calendar",
+	app.EventImportDone: "inbox_tray", app.EventImportFailed: "warning", app.EventAccountRegistered: "bust_in_silhouette", app.EventDigest: "calendar", app.EventDiskLow: "floppy_disk",
 }
 
 func (n Ntfy) Send(ctx context.Context, note app.Notification) error {

@@ -7,11 +7,15 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // LibraryLinker merges identical files into hard links.
 type LibraryLinker struct {
 	Root string
+	// Trash: Remove moves the file into the library's trash instead of deleting it.
+	Trash bool
+	Now   func() time.Time
 }
 
 // Link replaces the file other by a hard link to keep, after reading both and finding the
@@ -109,6 +113,13 @@ func (l LibraryLinker) Remove(ctx context.Context, keep, other string) error {
 		if keepSum != otherSum {
 			return fmt.Errorf("%s: content differs from %s", other, keep)
 		}
+	}
+	if l.Trash {
+		now := time.Now
+		if l.Now != nil {
+			now = l.Now
+		}
+		return LibraryTrash{Root: l.Root}.Put(other, now())
 	}
 	return os.Remove(op)
 }

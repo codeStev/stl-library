@@ -44,6 +44,11 @@ type API struct {
 	reviewOnce sync.Once
 	// Backup says when the library was last backed up (nil: not configured).
 	Backup *app.BackupStatus
+	// Disks watches the free space of the disks (nil: not watched).
+	Disks *app.DiskMonitor
+	// Trash holds deleted duplicates for TrashDays days (nil: deleting is final).
+	Trash     app.TrashStore
+	TrashDays int
 	// Linker merges duplicate files into hard links; nil when the library can't be changed.
 	Linker app.Linker
 	// Importer is set when importing from a downloads folder is on.
@@ -118,6 +123,9 @@ func (a *API) Handler() http.Handler {
 	h("POST /api/health/events/{id}/dismiss", admin, a.dismissHealthEvent)
 	h("GET /api/duplicates", full, a.duplicates)
 	h("GET /api/set-gaps", full, a.setGaps)
+	h("GET /api/trash", full, a.trash)
+	h("POST /api/trash/restore", admin, a.restoreTrash)
+	h("POST /api/trash/empty", admin, a.emptyTrash)
 	h("POST /api/duplicates/merge", admin, a.mergeDuplicates)
 	h("POST /api/bulk/plan", admin, a.bulkPlan)
 	h("POST /api/bulk/apply", admin, a.bulkApply)
@@ -1323,8 +1331,20 @@ func (a *API) health(w http.ResponseWriter, r *http.Request) {
 	if a.Health != nil {
 		st = a.Health.State()
 	}
+	type diskJSON struct {
+		Name  string `json:"name"`
+		Free  uint64 `json:"free"`
+		Total uint64 `json:"total"`
+		Low   bool   `json:"low"`
+		Error string `json:"error,omitempty"`
+	}
+	disks := []diskJSON{}
+	for _, d := range a.Disks.Info() {
+		disks = append(disks, diskJSON{d.Name, d.FreeBytes, d.TotalBytes, d.Low, d.Error})
+	}
 	bk := a.Backup.Info()
 	writeJSON(w, map[string]any{
+		"disks":   disks,
 		"backup":  map[string]any{"configured": bk.Configured, "lastUnix": bk.LastUnix, "overdue": bk.Overdue, "error": bk.Error},
 		"enabled": a.Health != nil,
 		"files":   counts.Files, "hashed": counts.Hashed,
@@ -1405,6 +1425,64 @@ func (a *API) duplicates(w http.ResponseWriter, r *http.Request) {
 		out = append(out, gj)
 	}
 	writeJSON(w, map[string]any{"total": total, "wastedOnPage": wasted, "canMerge": a.Linker != nil, "groups": out})
+}
+
+// trash lists the deleted files that can still be restored.
+func (a *API) trash(w http.ResponseWriter, r *http.Request) {
+	type item struct {
+		ID          string `json:"id"`
+		Path        string `json:"path"`
+		Size        int64  `json:"size"`
+		DeletedUnix int64  `json:"deletedUnix"`
+	}
+	out := []item{}
+	if a.Trash != nil {
+		items, err := a.Trash.List(r.Context())
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		for _, it := range items {
+			out = append(out, item{it.ID, it.Path, it.Size, it.DeletedUnix})
+		}
+	}
+	writeJSON(w, map[string]any{"enabled": a.Trash != nil, "days": a.TrashDays, "items": out})
+}
+
+func (a *API) restoreTrash(w http.ResponseWriter, r *http.Request) {
+	if a.Trash == nil {
+		http.Error(w, "there is no trash", http.StatusConflict)
+		return
+	}
+	var body struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	p, err := a.Trash.Restore(r.Context(), body.ID)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if a.Scan != nil {
+		a.Scan.Request()
+	}
+	writeJSON(w, map[string]string{"path": p})
+}
+
+func (a *API) emptyTrash(w http.ResponseWriter, r *http.Request) {
+	if a.Trash == nil {
+		http.Error(w, "there is no trash", http.StatusConflict)
+		return
+	}
+	n, err := a.Trash.Purge(r.Context(), time.Time{})
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]int{"removed": n})
 }
 
 // setGaps lists models whose supported and unsupported variants (otherwise alike) hold different numbers of files.

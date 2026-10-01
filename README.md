@@ -265,6 +265,8 @@ LIBRARY_ROOT=/path/to/library DATA_DIR=./data stlib serve
 | `IMPORT_DELETE` | `false` | `true`: remove imported folders from the downloads once verified in the library |
 | `BACKUP_MARKER` | (off) | a file your backup job touches when it is done (or the backup folder); the Health page and the weekly summary show when the last backup was |
 | `BACKUP_MAX_AGE` | `168h` | how old the backup marker may get before the backup counts as overdue |
+| `TRASH_DAYS` | `7` | deleted duplicates wait this many days in the library's `_trash` folder (restorable on the Health page); `0`: delete at once |
+| `DISK_MIN_FREE_GB`, `DISK_MIN_FREE_PERCENT` | `5`, `5` | a notification is sent when the library, data or downloads disk has less free than either |
 | `APP_SECRET` | (generated) | at least 32 characters; else `DATA_DIR/secret.key` is created |
 | `PUBLIC_URL` | (off) | the address users open the app at; turns on passkeys (and Google) |
 | `OPEN_REGISTRATION` | `true` | `false`: after the first account, only admins add accounts |

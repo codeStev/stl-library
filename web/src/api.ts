@@ -174,6 +174,7 @@ export const EVENT_LABELS: Record<string, string> = {
   "import.done": "New models were imported",
   "import.failed": "An import needs attention",
   "account.registered": "Someone created an account",
+  "disk.low": "A disk is running out of space",
   "digest.weekly": "Weekly summary (new models, imports, damaged files, backup)",
 };
 
@@ -400,6 +401,9 @@ export const api = {
   healthRun: () => send("POST", "/api/health/run"),
   healthPause: () => send("POST", "/api/health/pause"),
   dismissHealthEvent: (id: number) => send("POST", `/api/health/events/${id}/dismiss`),
+  trash: () => get<TrashState>("/api/trash"),
+  restoreTrash: (id: string) => send<{ path: string }>("POST", "/api/trash/restore", { id }),
+  emptyTrash: () => send<{ removed: number }>("POST", "/api/trash/empty"),
   setGaps: () => get<SetGap[]>("/api/set-gaps"),
   mergeDuplicates: (g: { sha256: string; size: number }, keepPart: number, remove: boolean) =>
     send<{ merged: number; error?: string }>("POST", "/api/duplicates/merge", { sha256: g.sha256, size: g.size, keepPart, remove }),
@@ -540,6 +544,7 @@ export interface HealthEvent {
   otherCopies?: string[];
 }
 export interface HealthState {
+  disks: { name: string; free: number; total: number; low: boolean; error?: string }[];
   backup: { configured: boolean; lastUnix: number; overdue: boolean; error?: string };
   enabled: boolean;
   files: number;
@@ -557,6 +562,11 @@ export interface DuplicateGroup {
   size: number;
   wasted: number;
   files: { partId: number; path: string; modelId: number; modelName: string; linked?: boolean }[];
+}
+export interface TrashState {
+  enabled: boolean;
+  days: number;
+  items: { id: string; path: string; size: number; deletedUnix: number }[];
 }
 export interface SetGap {
   modelId: number;

@@ -34,6 +34,7 @@ type Digest struct {
 	Source  DigestSource
 	Imports ImportLog // nil when importing is off
 	Backup  *BackupStatus
+	Disks   *DiskMonitor
 	Meta    MetaStore
 	Notes   notifier
 	Every   time.Duration // 7 days when zero
@@ -127,6 +128,17 @@ func (d *Digest) build(ctx context.Context, since, now time.Time) (Notification,
 	priority := "default"
 	if len(corrupt)+len(missing) > 0 {
 		priority = "high"
+	}
+	for _, disk := range d.Disks.Info() {
+		switch {
+		case disk.Error != "":
+			lines = append(lines, "Disk "+disk.Name+": can't be read: "+disk.Error)
+		case disk.Low:
+			lines = append(lines, "Disk "+disk.Name+": LOW - only "+GB(disk.FreeBytes)+" free")
+			priority = "high"
+		default:
+			lines = append(lines, "Disk "+disk.Name+": "+GB(disk.FreeBytes)+" free")
+		}
 	}
 	if b := d.Backup.Info(); b.Configured {
 		switch {

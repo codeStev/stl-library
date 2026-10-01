@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/codeStev/stl-library/internal/adapters/sqlite"
 	"github.com/codeStev/stl-library/internal/adapters/web"
 	"github.com/codeStev/stl-library/internal/app"
+	"github.com/codeStev/stl-library/internal/platform/diskfree"
 )
 
 // importConfig turns on importing from a downloads folder.
@@ -63,7 +65,21 @@ func serve(ctx context.Context, root, data, listen string, every time.Duration, 
 	if err != nil {
 		return err
 	}
-	api := &httpapi.API{Store: store, Files: files, Thumbs: thumbs, Plates: disk.PlateStore{Dir: filepath.Join(data, "plates")}, Previews: previews, Editor: disk.LibraryWriter{Root: root}, Linker: disk.LibraryLinker{Root: root}, Tidy: &app.Tidy{Tidier: disk.LibraryTidier{Root: root}}, User: app.UserData{Store: store}, Printing: printing,
+	trashDays := 7
+	if v := os.Getenv("TRASH_DAYS"); v != "" {
+		if d, err := strconv.Atoi(v); err == nil && d >= 0 {
+			trashDays = d
+		} else {
+			slog.Warn("TRASH_DAYS is not a number of days, using 7", "value", v)
+		}
+	}
+	linker := disk.LibraryLinker{Root: root, Trash: trashDays > 0}
+	var trash app.TrashStore
+	if trashDays > 0 {
+		trash = disk.LibraryTrash{Root: root}
+		go purgeLoop(ctx, trash, time.Duration(trashDays)*24*time.Hour)
+	}
+	api := &httpapi.API{Store: store, Files: files, Thumbs: thumbs, Plates: disk.PlateStore{Dir: filepath.Join(data, "plates")}, Previews: previews, Editor: disk.LibraryWriter{Root: root}, Linker: linker, Trash: trash, TrashDays: trashDays, Tidy: &app.Tidy{Tidier: disk.LibraryTidier{Root: root}}, User: app.UserData{Store: store}, Printing: printing,
 		Notifications: notifications, Auth: auth, TrustProxy: os.Getenv("TRUST_PROXY_HEADERS") == "true",
 		SecureCookies: strings.HasPrefix(os.Getenv("PUBLIC_URL"), "https://")}
 	watcher := &app.PrintWatcher{Printing: printing, Store: store, Notify: notifications}
@@ -100,7 +116,10 @@ func serve(ctx context.Context, root, data, listen string, every time.Duration, 
 	}
 	backup := backupFromEnv()
 	api.Backup = backup
-	digest := &app.Digest{Source: store, Backup: backup, Meta: store, Notes: notifications}
+	disks := diskMonitorFromEnv(root, data, imp, store, notifications)
+	api.Disks = disks
+	go diskLoop(ctx, disks)
+	digest := &app.Digest{Source: store, Backup: backup, Disks: disks, Meta: store, Notes: notifications}
 	if imp != nil {
 		digest.Imports = store
 	}
@@ -147,6 +166,62 @@ func backupFromEnv() *app.BackupStatus {
 		}
 		return fi.ModTime(), nil
 	}}
+}
+
+// diskMonitorFromEnv watches the disks of the library, the downloads and the data folder:
+// DISK_MIN_FREE_GB (default 5) and DISK_MIN_FREE_PERCENT (default 5) say when one is low.
+func diskMonitorFromEnv(root, data string, imp *importConfig, meta app.MetaStore, notes *app.Notifications) *app.DiskMonitor {
+	minGB, minPct := 5.0, 5.0
+	if v := os.Getenv("DISK_MIN_FREE_GB"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 {
+			minGB = f
+		} else {
+			slog.Warn("DISK_MIN_FREE_GB is not a number, using 5", "value", v)
+		}
+	}
+	if v := os.Getenv("DISK_MIN_FREE_PERCENT"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 && f < 100 {
+			minPct = f
+		} else {
+			slog.Warn("DISK_MIN_FREE_PERCENT is not a percentage, using 5", "value", v)
+		}
+	}
+	targets := []app.DiskTarget{{Name: "Library", Path: root}, {Name: "Data", Path: data}}
+	if imp != nil {
+		targets = append(targets, app.DiskTarget{Name: "Downloads", Path: imp.source})
+	}
+	return &app.DiskMonitor{Targets: targets, MinFreeBytes: uint64(minGB * (1 << 30)), MinFreePercent: minPct,
+		Free: diskfree.Free, Meta: meta, Notes: notes}
+}
+
+// diskLoop checks the free space every 15 minutes.
+func diskLoop(ctx context.Context, m *app.DiskMonitor) {
+	for {
+		if err := m.Tick(ctx); err != nil && ctx.Err() == nil {
+			slog.Warn("disk space check", "err", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(15 * time.Minute):
+		}
+	}
+}
+
+// purgeLoop empties what has been in the trash longer than keep, once an hour.
+func purgeLoop(ctx context.Context, t app.TrashStore, keep time.Duration) {
+	for {
+		if n, err := t.Purge(ctx, time.Now().Add(-keep)); err != nil && ctx.Err() == nil {
+			slog.Warn("emptying the trash", "err", err)
+		} else if n > 0 {
+			slog.Info("trash emptied", "files", n)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Hour):
+		}
+	}
 }
 
 // digestLoop checks every hour whether the weekly digest is due.

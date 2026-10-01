@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Storage } from "./Storage";
-import { api, formatBytes, formatDate, type DuplicateGroup, type SetGap, type HealthState, type TidyItem, type TidyState } from "./api";
+import { api, formatBytes, formatDate, type DuplicateGroup, type SetGap, type TrashState, type HealthState, type TidyItem, type TidyState } from "./api";
 
 // The health page: how far the background hashing is, files that are in the library twice (same content),
 // files whose content changed on their own, and files that are gone.
@@ -39,6 +39,29 @@ export function Health({ admin }: { admin: boolean }) {
             {h.paused ? <button onClick={() => act(api.healthRun())}>Start checking</button> : <button onClick={() => act(api.healthPause())}>Pause</button>}
           </div>
         )}
+      </section>
+
+      <section>
+        <h2>Disk space</h2>
+        {h.disks.length === 0 && <p className="muted">Not watched.</p>}
+        <ul className="job-items">
+          {h.disks.map((d) => (
+            <li key={d.name}>
+              <span className="name">{d.name}</span>
+              {d.error ? (
+                <span className="error">{d.error}</span>
+              ) : (
+                <span className={d.low ? "error" : "muted"}>
+                  {formatBytes(d.free)} free of {formatBytes(d.total)} ({d.total ? Math.round((d.free / d.total) * 100) : 0}%){d.low ? " - low!" : ""}
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+        <p className="muted">
+          A notification is sent (event “A disk is running out of space”) when less than <code>DISK_MIN_FREE_GB</code> (5) or <code>DISK_MIN_FREE_PERCENT</code> (5)
+          is free.
+        </p>
       </section>
 
       <section>
@@ -106,10 +129,60 @@ export function Health({ admin }: { admin: boolean }) {
 
       <Leftovers admin={admin} />
 
+      <Trash admin={admin} />
+
       <SetGaps />
 
       <Duplicates admin={admin} />
     </div>
+  );
+}
+
+// Duplicates that were deleted from the library and can still be brought back.
+function Trash({ admin }: { admin: boolean }) {
+  const [t, setT] = useState<TrashState | null>(null);
+  const [error, setError] = useState("");
+  const load = useCallback(() => api.trash().then(setT, (e) => setError(String(e))), []);
+  useEffect(() => {
+    load();
+    const timer = setInterval(load, 10000); // deletions happen in the duplicates list above
+    return () => clearInterval(timer);
+  }, [load]);
+  const act = (p: Promise<unknown>) => p.then(load, (e) => setError(String(e)));
+  if (!t?.enabled) return error ? <p className="error">{error}</p> : null;
+  return (
+    <section>
+      <h2>Recently deleted ({t.items.length})</h2>
+      <p className="muted">
+        Deleted duplicates stay in the <code>_trash</code> folder of the library for {t.days} day{t.days === 1 ? "" : "s"} (<code>TRASH_DAYS</code>), then they are
+        removed for good.
+      </p>
+      {error && <p className="error">{error}</p>}
+      {t.items.length === 0 && <p className="muted">Nothing deleted lately.</p>}
+      <ul className="job-items">
+        {t.items.map((i) => (
+          <li key={i.id}>
+            <span className="name">{i.path}</span>
+            <span className="muted">
+              {formatBytes(i.size)} · deleted {formatDate(i.deletedUnix)}
+            </span>
+            {admin && (
+              <button className="link" onClick={() => act(api.restoreTrash(i.id))}>
+                restore
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+      {admin && t.items.length > 0 && (
+        <button
+          className="small"
+          onClick={() => window.confirm("Remove everything in the trash for good?") && act(api.emptyTrash())}
+        >
+          Empty the trash now
+        </button>
+      )}
+    </section>
   );
 }
 
@@ -173,7 +246,7 @@ function Duplicates({ admin }: { admin: boolean }) {
     setNote("");
     api.mergeDuplicates(g, keepPart, remove).then(
       (r) => {
-        setNote(r.error ? `Done for ${r.merged}; ${r.error}` : `${remove ? "Deleted" : "Merged"} ${r.merged} file(s).`);
+        setNote(r.error ? `Done for ${r.merged}; ${r.error}` : `${remove ? "Deleted" : "Merged"} ${r.merged} file(s).${remove ? " They can be restored from “Recently deleted” for a while." : ""}`);
         load(0);
       },
       (e) => setError(String(e)),

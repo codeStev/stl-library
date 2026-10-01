@@ -23,7 +23,7 @@ const (
 // (EventDigest, the weekly summary, is in digest.go.)
 
 // AllEvents in display order.
-var AllEvents = []string{EventPrintDone, EventPrintStopped, EventPrintError, EventImportDone, EventImportFailed, EventAccountRegistered, EventDigest}
+var AllEvents = []string{EventPrintDone, EventPrintStopped, EventPrintError, EventImportDone, EventImportFailed, EventAccountRegistered, EventDigest, EventDiskLow}
 
 // Notification is one message.
 type Notification struct {
