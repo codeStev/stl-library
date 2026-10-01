@@ -77,15 +77,19 @@ func (s *Store) Verified(ctx context.Context, j app.HashJob, sum string, atUnix 
 	return false, tx.Commit()
 }
 
+// mergedJoin attaches the merge record of a file while it is still valid (size and date unchanged).
+const mergedJoin = `LEFT JOIN dup_merge dm ON dm.path = h.path AND dm.size = h.size AND dm.mod_unix = h.mod_unix`
+
 // DuplicateGroups lists sets of files in the library with the same content, the biggest waste first,
-// and the total number of sets.
+// and the total number of sets. Files merged into hard links count as one copy.
 func (s *Store) DuplicateGroups(ctx context.Context, minSize int64, limit, offset int) ([]app.DupGroup, int, error) {
-	const from = `FROM file_hash h JOIN part p ON p.path = h.path WHERE h.size >= ? GROUP BY h.sha256, h.size HAVING count(*) > 1`
+	const from = `FROM file_hash h JOIN part p ON p.path = h.path ` + mergedJoin + `
+		WHERE h.size >= ? GROUP BY h.sha256, h.size HAVING sum(dm.path IS NULL) > 1`
 	var total int
 	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM (SELECT 1 `+from+`)`, minSize).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT h.sha256, h.size `+from+` ORDER BY (count(*) - 1) * h.size DESC, h.sha256 LIMIT ? OFFSET ?`, minSize, limit, offset)
+	rows, err := s.db.QueryContext(ctx, `SELECT h.sha256, h.size `+from+` ORDER BY (sum(dm.path IS NULL) - 1) * h.size DESC, h.sha256 LIMIT ? OFFSET ?`, minSize, limit, offset)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -100,24 +104,48 @@ func (s *Store) DuplicateGroups(ctx context.Context, minSize int64, limit, offse
 	}
 	rows.Close()
 	for i := range groups {
-		frows, err := s.db.QueryContext(ctx, `SELECT p.id, h.path, m.id, `+modelName+`
-			FROM file_hash h JOIN part p ON p.path = h.path JOIN variant v ON v.id = p.variant_id
-			JOIN model m ON m.id = v.model_id LEFT JOIN model_user mu ON mu.dir = m.dir
-			WHERE h.sha256 = ? AND h.size = ? ORDER BY h.path`, groups[i].SHA256, groups[i].Size)
+		groups[i].Files, err = s.dupFiles(ctx, groups[i].SHA256, groups[i].Size)
 		if err != nil {
 			return nil, 0, err
 		}
-		for frows.Next() {
-			var f app.DupFile
-			if err := frows.Scan(&f.PartID, &f.Path, &f.ModelID, &f.ModelName); err != nil {
-				frows.Close()
-				return nil, 0, err
-			}
-			groups[i].Files = append(groups[i].Files, f)
-		}
-		frows.Close()
 	}
 	return groups, total, nil
+}
+
+// DuplicateGroup returns the files with exactly this content.
+func (s *Store) DuplicateGroup(ctx context.Context, sha string, size int64) (app.DupGroup, error) {
+	files, err := s.dupFiles(ctx, sha, size)
+	if err != nil {
+		return app.DupGroup{}, err
+	}
+	return app.DupGroup{SHA256: sha, Size: size, Files: files}, nil
+}
+
+func (s *Store) dupFiles(ctx context.Context, sha string, size int64) ([]app.DupFile, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT p.id, h.path, m.id, `+modelName+`, dm.path IS NOT NULL
+		FROM file_hash h JOIN part p ON p.path = h.path JOIN variant v ON v.id = p.variant_id
+		JOIN model m ON m.id = v.model_id LEFT JOIN model_user mu ON mu.dir = m.dir `+mergedJoin+`
+		WHERE h.sha256 = ? AND h.size = ? ORDER BY h.path`, sha, size)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []app.DupFile
+	for rows.Next() {
+		var f app.DupFile
+		if err := rows.Scan(&f.PartID, &f.Path, &f.ModelID, &f.ModelName, &f.Linked); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// SaveMerge records that a file was replaced by a hard link to an identical one.
+func (s *Store) SaveMerge(ctx context.Context, path string, size, modUnix, atUnix int64) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO dup_merge (path, size, mod_unix, at_unix) VALUES (?,?,?,?)
+		ON CONFLICT(path) DO UPDATE SET size = excluded.size, mod_unix = excluded.mod_unix, at_unix = excluded.at_unix`, path, size, modUnix, atUnix)
+	return err
 }
 
 // HealthEvents lists the events of a kind that nobody dismissed, newest first.

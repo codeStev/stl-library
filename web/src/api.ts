@@ -399,6 +399,8 @@ export const api = {
   healthRun: () => send("POST", "/api/health/run"),
   healthPause: () => send("POST", "/api/health/pause"),
   dismissHealthEvent: (id: number) => send("POST", `/api/health/events/${id}/dismiss`),
+  mergeDuplicates: (g: { sha256: string; size: number }, keepPart: number) =>
+    send<{ merged: number; error?: string }>("POST", "/api/duplicates/merge", { sha256: g.sha256, size: g.size, keepPart }),
   duplicates: (minKB: number, offset: number) => get<DuplicatePage>(`/api/duplicates?min=${minKB}&limit=25&offset=${offset}`),
   facets: () => get<Record<"scale" | "supports" | "format" | "fill", Facet[]>>("/api/facets"),
   tags: () => get<Tag[]>("/api/tags"),
@@ -438,6 +440,7 @@ export const api = {
   tidyRun: () => send("POST", "/api/tidy/run"),
   tidyApply: (paths: string[]) => send<{ done: number; failed: string[] }>("POST", "/api/tidy/apply", { paths }),
   runImport: () => send("POST", "/api/imports/run"),
+  cleanDuplicateImports: () => send<{ removed: number }>("POST", "/api/imports/clean-duplicates"),
   retryFailedImports: () => send<{ requested: number }>("POST", "/api/imports/retry-failed"),
   previewImport: (source: string) => get<ImportPreview>(`/api/imports/preview?source=${encodeURIComponent(source)}`),
   enqueue: (variantId: number, note = "") => send("PUT", `/api/variants/${variantId}/queue`, { note }),
@@ -549,11 +552,12 @@ export interface DuplicateGroup {
   sha256: string;
   size: number;
   wasted: number;
-  files: { partId: number; path: string; modelId: number; modelName: string }[];
+  files: { partId: number; path: string; modelId: number; modelName: string; linked?: boolean }[];
 }
 export interface DuplicatePage {
   total: number;
   wastedOnPage: number;
+  canMerge?: boolean;
   groups: DuplicateGroup[];
 }
 

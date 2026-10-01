@@ -35,6 +35,7 @@ export function Imports({ admin = true }: { admin?: boolean }) {
       (e) => setPreview({ source, error: String(e) }),
     );
   };
+  const skipped = data?.records.filter((r) => r.state === "duplicate" && !r.message?.includes("removed from the downloads")).length ?? 0;
   const failed = data?.records.filter((r) => r.state === "failed").length ?? 0;
   const groups = useMemo(() => {
     const out = new Map<string, ImportRecord[]>();
@@ -67,6 +68,18 @@ export function Imports({ admin = true }: { admin?: boolean }) {
             <button className="small" disabled={running} onClick={() => act(api.runImport())}>
               Import now
             </button>
+            {skipped > 0 && (
+              <button
+                className="small"
+                title="Removes the skipped folders from the downloads after checking again that the library has all their model files"
+                onClick={() =>
+                  window.confirm(`Delete ${skipped} skipped download folder(s) from the downloads folder? Their model files are in the library already.`) &&
+                  act(api.cleanDuplicateImports())
+                }
+              >
+                Delete skipped duplicates from the downloads ({skipped})
+              </button>
+            )}
             {failed > 0 && (
               <button className="small" onClick={() => act(api.retryFailedImports())}>
                 Retry all failed ({failed})

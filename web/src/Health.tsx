@@ -84,21 +84,24 @@ export function Health({ admin }: { admin: boolean }) {
 
       <Leftovers admin={admin} />
 
-      <Duplicates />
+      <Duplicates admin={admin} />
     </div>
   );
 }
 
-function Duplicates() {
+function Duplicates({ admin }: { admin: boolean }) {
   const [min, setMin] = useState(64);
   const [groups, setGroups] = useState<DuplicateGroup[]>([]);
   const [total, setTotal] = useState(0);
+  const [canMerge, setCanMerge] = useState(false);
+  const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const load = useCallback(
     (offset: number) =>
       api.duplicates(min, offset).then(
         (p) => {
           setTotal(p.total);
+          setCanMerge(!!p.canMerge);
           setGroups((prev) => (offset === 0 ? p.groups : [...prev, ...p.groups]));
         },
         (e) => setError(String(e)),
@@ -108,11 +111,23 @@ function Duplicates() {
   useEffect(() => {
     load(0);
   }, [load]);
+  const merge = (g: DuplicateGroup, keepPart: number) => {
+    const keep = g.files.find((f) => f.partId === keepPart);
+    if (!window.confirm(`Keep ${keep?.path} and make the other ${g.files.filter((f) => !f.linked).length - 1} cop(ies) hard links to it? Every model keeps all its files; only the disk space is shared.`)) return;
+    setNote("");
+    api.mergeDuplicates(g, keepPart).then(
+      (r) => {
+        setNote(r.error ? `Merged ${r.merged}; ${r.error}` : `Merged ${r.merged} file(s) into one copy.`);
+        load(0);
+      },
+      (e) => setError(String(e)),
+    );
+  };
   return (
     <section>
       <h2>Files that are in the library twice ({total})</h2>
       <p className="muted">
-        Files with exactly the same content. Nothing is deleted here: look at where each copy lives and remove the extra ones yourself.{" "}
+        Files with exactly the same content. {canMerge && admin ? "“Merge” keeps the copy you pick and turns the others into hard links to it (every model keeps all its files, the space is shared; works inside one disk). " : "Nothing is deleted here. "}{" "}
         Smallest file considered:{" "}
         <select value={min} onChange={(e) => setMin(Number(e.target.value))}>
           {[0, 64, 1024, 10240].map((k) => (
@@ -123,6 +138,7 @@ function Duplicates() {
         </select>
       </p>
       {error && <p className="error">{error}</p>}
+      {note && <p className="muted">{note}</p>}
       {groups.map((g) => (
         <div key={g.sha256 + g.size} className="dup-group">
           <div className="dup-head">
@@ -133,6 +149,12 @@ function Duplicates() {
               <li key={f.partId}>
                 <a href={`#/model/${f.modelId}`}>{f.modelName}</a>
                 <span className="name muted">{f.path}</span>
+                {f.linked && <span className="muted"> · hard link, no extra space</span>}
+                {admin && canMerge && !f.linked && (
+                  <button className="link" onClick={() => merge(g, f.partId)}>
+                    keep this one, merge the others
+                  </button>
+                )}
               </li>
             ))}
           </ul>

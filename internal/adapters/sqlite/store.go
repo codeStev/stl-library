@@ -211,6 +211,10 @@ var migrations = []string{
 	// The batch review of preview pictures: which models were looked at ("set": a new picture was chosen,
 	// "skip": the current one is fine), by folder like the rest of the user data.
 	`CREATE TABLE preview_review (dir TEXT PRIMARY KEY, action TEXT NOT NULL, at_unix INTEGER NOT NULL);`,
+
+	// Duplicate files merged into hard links: the copy takes no extra space any more. A record counts
+	// only while the file still has the size and date it had after merging.
+	`CREATE TABLE dup_merge (path TEXT PRIMARY KEY, size INTEGER NOT NULL, mod_unix INTEGER NOT NULL, at_unix INTEGER NOT NULL);`,
 }
 
 func migrate(db *sql.DB) error {

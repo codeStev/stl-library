@@ -22,6 +22,7 @@ type DupFile struct {
 	Path      string
 	ModelID   int64
 	ModelName string
+	Linked    bool // already a hard link to another copy: takes no space of its own
 }
 
 // DupGroup is a set of files with exactly the same content.
@@ -32,7 +33,18 @@ type DupGroup struct {
 }
 
 // Wasted is the space the extra copies take.
-func (g DupGroup) Wasted() int64 { return int64(len(g.Files)-1) * g.Size }
+func (g DupGroup) Wasted() int64 {
+	copies := 0
+	for _, f := range g.Files {
+		if !f.Linked {
+			copies++
+		}
+	}
+	if copies < 2 {
+		return 0
+	}
+	return int64(copies-1) * g.Size
+}
 
 // HealthEvent is something the integrity check found.
 type HealthEvent struct {

@@ -77,7 +77,8 @@ func (s *Store) Storage(ctx context.Context) (app.StorageReport, error) {
 	krows.Close()
 
 	if err := s.db.QueryRowContext(ctx, `SELECT count(*), coalesce(sum((c - 1) * size), 0) FROM (
-			SELECT count(*) AS c, h.size AS size FROM file_hash h JOIN part p ON p.path = h.path GROUP BY h.sha256, h.size HAVING count(*) > 1)`).
+			SELECT sum(dm.path IS NULL) AS c, h.size AS size FROM file_hash h JOIN part p ON p.path = h.path `+mergedJoin+`
+			GROUP BY h.sha256, h.size HAVING sum(dm.path IS NULL) > 1)`).
 		Scan(&r.DuplicateGroups, &r.DuplicateBytes); err != nil {
 		return r, err
 	}

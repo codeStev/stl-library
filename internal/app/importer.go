@@ -335,6 +335,46 @@ func (im *Importer) Run(ctx context.Context) (ImportSummary, error) {
 	return sum, nil
 }
 
+// CleanDuplicates removes the download folders that were skipped as
+// duplicates from the downloads. Each one is checked again first: the
+// library must still have every one of its model files.
+func (im *Importer) CleanDuplicates(ctx context.Context) (int, error) {
+	if im.Known == nil {
+		return 0, fmt.Errorf("%w: no hash index to compare with", ErrInvalid)
+	}
+	records, err := im.Log.ImportRecords(ctx)
+	if err != nil {
+		return 0, err
+	}
+	files, err := im.Downloads.List(ctx)
+	if err != nil {
+		return 0, err
+	}
+	units := map[string]importer.Unit{}
+	for _, u := range importer.Units(files) {
+		units[u.Path] = u
+	}
+	removed := 0
+	for _, r := range records {
+		u, ok := units[r.Source]
+		if r.State != ImportDuplicate || !ok {
+			continue
+		}
+		if dup, err := im.isDuplicate(ctx, u); err != nil || !dup {
+			continue // changed or unreadable since: leave it
+		}
+		if err := im.Downloads.Remove(ctx, u.Path, sourceRels(u)); err != nil {
+			return removed, fmt.Errorf("removing %s: %w", u.Path, err)
+		}
+		r.Message = "all model files are in the library already - removed from the downloads"
+		if err := im.save(ctx, r); err != nil {
+			return removed, err
+		}
+		removed++
+	}
+	return removed, nil
+}
+
 // Request marks a download folder for import (e.g. one that existed
 // before importing started, or one that failed); the next run imports it
 // once it is complete.

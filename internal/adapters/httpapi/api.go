@@ -42,6 +42,8 @@ type API struct {
 	Tidy       *app.Tidy
 	review     *app.PreviewReview
 	reviewOnce sync.Once
+	// Linker merges duplicate files into hard links; nil when the library can't be changed.
+	Linker app.Linker
 	// Importer is set when importing from a downloads folder is on.
 	Importer *app.Importer
 	// Printing handles the (optional) network printer.
@@ -113,6 +115,7 @@ func (a *API) Handler() http.Handler {
 	h("POST /api/health/pause", admin, a.healthPause)
 	h("POST /api/health/events/{id}/dismiss", admin, a.dismissHealthEvent)
 	h("GET /api/duplicates", full, a.duplicates)
+	h("POST /api/duplicates/merge", admin, a.mergeDuplicates)
 	h("POST /api/bulk/plan", admin, a.bulkPlan)
 	h("POST /api/bulk/apply", admin, a.bulkApply)
 	h("GET /api/storage", full, a.storage)
@@ -125,6 +128,7 @@ func (a *API) Handler() http.Handler {
 	h("POST /api/imports/request", admin, a.requestImport)
 	h("POST /api/imports/run", admin, a.runImport)
 	h("POST /api/imports/retry-failed", admin, a.retryFailedImports)
+	h("POST /api/imports/clean-duplicates", admin, a.cleanDuplicateImports)
 	h("GET /api/imports/preview", admin, a.previewImport)
 	h("GET /api/jobs", full, a.jobs)
 	h("POST /api/jobs", full, a.createJob)
@@ -1375,6 +1379,7 @@ func (a *API) duplicates(w http.ResponseWriter, r *http.Request) {
 		Path      string `json:"path"`
 		ModelID   int64  `json:"modelId"`
 		ModelName string `json:"modelName"`
+		Linked    bool   `json:"linked,omitempty"`
 	}
 	type group struct {
 		SHA256 string `json:"sha256"`
@@ -1387,12 +1392,40 @@ func (a *API) duplicates(w http.ResponseWriter, r *http.Request) {
 	for _, g := range groups {
 		gj := group{SHA256: g.SHA256, Size: g.Size, Wasted: g.Wasted(), Files: []file{}}
 		for _, f := range g.Files {
-			gj.Files = append(gj.Files, file{f.PartID, f.Path, f.ModelID, f.ModelName})
+			gj.Files = append(gj.Files, file{f.PartID, f.Path, f.ModelID, f.ModelName, f.Linked})
 		}
 		wasted += gj.Wasted
 		out = append(out, gj)
 	}
-	writeJSON(w, map[string]any{"total": total, "wastedOnPage": wasted, "groups": out})
+	writeJSON(w, map[string]any{"total": total, "wastedOnPage": wasted, "canMerge": a.Linker != nil, "groups": out})
+}
+
+// mergeDuplicates keeps one copy of a duplicate group and turns the others into hard links to it.
+func (a *API) mergeDuplicates(w http.ResponseWriter, r *http.Request) {
+	ms, ok := a.Store.(app.MergeStore)
+	if a.Linker == nil || !ok {
+		http.Error(w, "this server cannot change the library", http.StatusConflict)
+		return
+	}
+	var body struct {
+		SHA256   string `json:"sha256"`
+		Size     int64  `json:"size"`
+		KeepPart int64  `json:"keepPart"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	n, err := app.MergeDuplicates(r.Context(), ms, a.Linker, body.SHA256, body.Size, body.KeepPart, time.Now())
+	if err != nil && n == 0 {
+		fail(w, err)
+		return
+	}
+	resp := map[string]any{"merged": n}
+	if err != nil {
+		resp["error"] = err.Error()
+	}
+	writeJSON(w, resp)
 }
 
 // editTags adds and removes tags on many models at once.
@@ -1918,6 +1951,20 @@ func (a *API) retryFailedImports(w http.ResponseWriter, r *http.Request) {
 		a.Importer.Trigger()
 	}
 	writeJSON(w, map[string]int{"requested": n})
+}
+
+// cleanDuplicateImports removes the download folders skipped as duplicates.
+func (a *API) cleanDuplicateImports(w http.ResponseWriter, r *http.Request) {
+	if a.Importer == nil {
+		http.Error(w, "importing is not enabled", http.StatusConflict)
+		return
+	}
+	n, err := a.Importer.CleanDuplicates(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]int{"removed": n})
 }
 
 // previewImport shows where the files of one download folder would go,
