@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"strings"
 
 	"github.com/codeStev/stl-library/internal/app"
 )
@@ -186,4 +187,35 @@ func (s *Store) PruneHashes(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM file_hash WHERE path NOT IN (SELECT path FROM part)
 		AND sha256 IN (SELECT h2.sha256 FROM file_hash h2 JOIN part p ON p.path = h2.path)`)
 	return err
+}
+
+// KnownHashes returns which of the sums belong to a hashed library file.
+func (s *Store) KnownHashes(ctx context.Context, sums []string) (map[string]bool, error) {
+	out := map[string]bool{}
+	const chunk = 500
+	for i := 0; i < len(sums); i += chunk {
+		part := sums[i:min(i+chunk, len(sums))]
+		args := make([]any, len(part))
+		for j, v := range part {
+			args[j] = v
+		}
+		rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT sha256 FROM file_hash WHERE sha256 IN (?`+strings.Repeat(",?", len(part)-1)+`)`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var v string
+			if err := rows.Scan(&v); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[v] = true
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	return out, nil
 }

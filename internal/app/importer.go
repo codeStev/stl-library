@@ -53,11 +53,12 @@ type LibraryWriter interface {
 
 // Import states of a download folder.
 const (
-	ImportExisting = "existing" // was there before importing started; imported only on request
-	ImportWaiting  = "waiting"  // not complete yet
-	ImportQueued   = "queued"   // requested by the user, imported once complete
-	ImportDone     = "imported"
-	ImportFailed   = "failed"
+	ImportExisting  = "existing" // was there before importing started; imported only on request
+	ImportWaiting   = "waiting"  // not complete yet
+	ImportQueued    = "queued"   // requested by the user, imported once complete
+	ImportDone      = "imported"
+	ImportDuplicate = "duplicate" // every model file is in the library already (by content): not imported
+	ImportFailed    = "failed"
 )
 
 // ImportRecord is what happened to one download folder.
@@ -69,6 +70,14 @@ type ImportRecord struct {
 	Files       int    // files copied so far
 	Message     string
 	UpdatedUnix int64
+}
+
+// HashIndex knows the content hashes of the library's files (found by the
+// background hasher).
+type HashIndex interface {
+	// KnownHashes returns which of the given SHA-256 sums (hex) belong to a
+	// library file.
+	KnownHashes(ctx context.Context, sums []string) (map[string]bool, error)
 }
 
 // ImportLog keeps the import records.
@@ -103,7 +112,11 @@ type Importer struct {
 	// already in the model under another variant folder (e.g. "Supported
 	// STL" where the importer would write "Supported") counts as there.
 	MergeExisting bool
-	Now           func() time.Time
+	// Known, when set, lets the importer skip a download folder whose model
+	// files (STL, OBJ, 3MF) are all in the library already, whatever their
+	// names - e.g. a "last months models" drive that repeats earlier models.
+	Known HashIndex
+	Now   func() time.Time
 
 	mu      sync.Mutex
 	prog    ImportProgress
@@ -171,6 +184,7 @@ func (im *Importer) RetryFailed(ctx context.Context) (int, error) {
 // ImportSummary counts the outcome of a run.
 type ImportSummary struct {
 	Imported, Waiting, Failed, Files int
+	Duplicates                       int // folders skipped because the library has all their model files
 	Removed                          int // imported folders removed from the downloads
 	Baselined                        int // units recorded as existing on the first run
 }
@@ -234,6 +248,8 @@ func (im *Importer) Run(ctx context.Context) (ImportSummary, error) {
 			continue
 		case known && rec.State == ImportDone && rec.Signature == sig:
 			continue
+		case known && rec.State == ImportDuplicate && rec.Signature == sig:
+			continue // imported anyway when requested
 		case known && rec.State == ImportFailed && rec.Signature == sig:
 			continue // retried when something changes, or on request
 		}
@@ -261,6 +277,33 @@ func (im *Importer) Run(ctx context.Context) (ImportSummary, error) {
 			continue
 		}
 		im.setProgress(func(p *ImportProgress) { p.Current = u.Path })
+		if rec.Target == "" && rec.State != ImportQueued && im.Known != nil { // a requested import is done regardless
+			dup, err := im.isDuplicate(ctx, u)
+			switch {
+			case errors.Is(err, errIncomplete):
+				rec.State, rec.Message = ImportWaiting, err.Error()
+				sum.Waiting++
+				if err := im.save(ctx, rec); err != nil {
+					return sum, err
+				}
+				continue
+			case err != nil:
+				rec.State, rec.Message, rec.Signature = ImportFailed, err.Error(), sig
+				sum.Failed++
+				if err := im.save(ctx, rec); err != nil {
+					return sum, err
+				}
+				continue
+			case dup:
+				rec.State, rec.Signature = ImportDuplicate, sig
+				rec.Message = "all model files are in the library already - not imported"
+				sum.Duplicates++
+				if err := im.save(ctx, rec); err != nil {
+					return sum, err
+				}
+				continue
+			}
+		}
 		n, err := im.importUnit(ctx, u, &rec)
 		im.setProgress(func(p *ImportProgress) { p.Current, p.DoneUnits = "", p.DoneUnits+1 })
 		sum.Files += n
@@ -444,6 +487,55 @@ func (im *Importer) importUnit(ctx context.Context, u importer.Unit, rec *Import
 		}
 	}
 	return copied, err
+}
+
+// modelFile reports files that make up a model's content.
+func modelFile(rel string) bool {
+	switch strings.ToLower(path.Ext(rel)) {
+	case ".stl", ".obj", ".3mf":
+		return true
+	}
+	return false
+}
+
+// isDuplicate reports whether the unit has model files and every one of
+// them (compared by SHA-256) is in the library already.
+func (im *Importer) isDuplicate(ctx context.Context, u importer.Unit) (bool, error) {
+	files, err := im.Downloads.Expand(ctx, u.Path, u.Files)
+	if err != nil {
+		return false, fmt.Errorf("%w: %v", errIncomplete, err)
+	}
+	var models []importer.File
+	for _, f := range files {
+		if !f.Hidden && modelFile(f.Rel) {
+			models = append(models, f)
+		}
+	}
+	if len(models) == 0 {
+		return false, nil
+	}
+	var sums []string
+	err = im.Downloads.Each(ctx, u.Path, models, func(f importer.File, r io.Reader) error {
+		h := sha256.New()
+		if _, err := io.Copy(h, r); err != nil {
+			return err
+		}
+		sums = append(sums, hex.EncodeToString(h.Sum(nil)))
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	known, err := im.Known.KnownHashes(ctx, sums)
+	if err != nil {
+		return false, err
+	}
+	for _, s := range sums {
+		if !known[s] {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 type writtenFile struct{ to, sum string }

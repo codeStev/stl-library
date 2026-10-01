@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, formatDate, type ImportList, type ImportPreview, type ImportRecord } from "./api";
 
-const ORDER: ImportRecord["state"][] = ["failed", "queued", "waiting", "imported", "existing"];
+const ORDER: ImportRecord["state"][] = ["failed", "queued", "waiting", "imported", "duplicate", "existing"];
 const TITLES: Record<ImportRecord["state"], string> = {
   failed: "Need attention",
   queued: "Requested",
   waiting: "Waiting (download not complete yet)",
   imported: "Imported",
+  duplicate: "Skipped (already in the library, import on request)",
   existing: "Were there before importing started (import on request)",
 };
 
@@ -76,7 +77,7 @@ export function Imports({ admin = true }: { admin?: boolean }) {
       </div>
       {groups.length === 0 && <p className="empty">Nothing seen in the downloads folder yet.</p>}
       {groups.map(([state, list]) => (
-        <details key={state} open={state !== "existing" && state !== "imported"}>
+        <details key={state} open={state !== "existing" && state !== "imported" && state !== "duplicate"}>
           <summary>
             {TITLES[state]} <span className="count">{list.length}</span>
           </summary>

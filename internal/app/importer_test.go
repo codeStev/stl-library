@@ -453,3 +453,54 @@ func TestTriggerWakesOnceAndNeverBlocks(t *testing.T) {
 	default:
 	}
 }
+
+type fakeIndex struct{ known map[string]bool }
+
+func (x fakeIndex) KnownHashes(_ context.Context, sums []string) (map[string]bool, error) {
+	out := map[string]bool{}
+	for _, s := range sums {
+		if x.known[s] {
+			out[s] = true
+		}
+	}
+	return out, nil
+}
+
+func TestImporterSkipsFoldersWhoseModelFilesAreInTheLibrary(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	old := now.Add(-3 * time.Hour).Unix()
+	dl := &fakeDownloads{
+		files:    []importer.File{{Rel: "bulk/Seen Before/Seen.stl", Size: 1, ModUnix: old}},
+		archives: map[string][]string{},
+		broken:   map[string]bool{},
+	}
+	lib := &fakeLibrary{files: map[string]int64{}}
+	log := &memLog{recs: map[string]ImportRecord{}, baselined: true}
+	sum := sha256.Sum256([]byte("x")) // what the fake downloads contain
+	idx := fakeIndex{known: map[string]bool{hex.EncodeToString(sum[:]): true}}
+	im := &Importer{Downloads: dl, Library: lib, Log: log, Known: idx, Settle: time.Hour, Now: func() time.Time { return now }}
+	ctx := context.Background()
+
+	s, err := im.Run(ctx)
+	if err != nil || s.Duplicates != 1 || s.Imported != 0 || lib.list() != "" || log.recs["bulk/Seen Before"].State != ImportDuplicate {
+		t.Fatalf("duplicate: %+v %v %+v\n%s", s, err, log.recs, lib.list())
+	}
+	if s, _ := im.Run(ctx); s.Duplicates != 0 {
+		t.Errorf("a skipped folder is looked at again: %+v", s)
+	}
+
+	// Requested explicitly: imported anyway.
+	if err := im.Request(ctx, "bulk/Seen Before"); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := im.Run(ctx); s.Imported != 1 || !strings.Contains(lib.list(), "Seen.stl") {
+		t.Errorf("requested: %+v\n%s", s, lib.list())
+	}
+
+	// Unknown content is imported.
+	dl.files = []importer.File{{Rel: "bulk/Fresh/Fresh.stl", Size: 1, ModUnix: old}}
+	im.Known = fakeIndex{known: map[string]bool{}}
+	if s, _ := im.Run(ctx); s.Imported != 1 || s.Duplicates != 0 {
+		t.Errorf("new content: %+v", s)
+	}
+}

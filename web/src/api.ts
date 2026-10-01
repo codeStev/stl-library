@@ -201,7 +201,7 @@ export interface ScanState {
 
 export interface ImportRecord {
   source: string;
-  state: "existing" | "waiting" | "queued" | "imported" | "failed";
+  state: "existing" | "waiting" | "queued" | "imported" | "duplicate" | "failed";
   target?: string;
   files: number;
   message?: string;
