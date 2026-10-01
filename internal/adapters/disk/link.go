@@ -72,6 +72,47 @@ func (l LibraryLinker) Link(ctx context.Context, keep, other string) (int64, err
 	return fi.ModTime().Unix(), nil
 }
 
+// Remove deletes the file other after reading both files and finding the same content.
+func (l LibraryLinker) Remove(ctx context.Context, keep, other string) error {
+	w := LibraryWriter{Root: l.Root}
+	kp, err := w.full(keep)
+	if err != nil {
+		return err
+	}
+	op, err := w.full(other)
+	if err != nil {
+		return err
+	}
+	if keep == other {
+		return fmt.Errorf("%s: that is the copy to keep", other)
+	}
+	ki, err := os.Lstat(kp)
+	if err != nil {
+		return err
+	}
+	oi, err := os.Lstat(op)
+	if err != nil {
+		return err
+	}
+	if !ki.Mode().IsRegular() || !oi.Mode().IsRegular() || ki.Size() != oi.Size() {
+		return fmt.Errorf("%s: not an identical file to %s", other, keep)
+	}
+	if !os.SameFile(ki, oi) { // a hard link has the content by definition
+		keepSum, err := fileSum(ctx, kp)
+		if err != nil {
+			return err
+		}
+		otherSum, err := fileSum(ctx, op)
+		if err != nil {
+			return err
+		}
+		if keepSum != otherSum {
+			return fmt.Errorf("%s: content differs from %s", other, keep)
+		}
+	}
+	return os.Remove(op)
+}
+
 func fileSum(ctx context.Context, p string) ([sha256.Size]byte, error) {
 	var out [sha256.Size]byte
 	f, err := os.Open(p)

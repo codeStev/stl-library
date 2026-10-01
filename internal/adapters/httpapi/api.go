@@ -1454,15 +1454,19 @@ func (a *API) mergeDuplicates(w http.ResponseWriter, r *http.Request) {
 		SHA256   string `json:"sha256"`
 		Size     int64  `json:"size"`
 		KeepPart int64  `json:"keepPart"`
+		Remove   bool   `json:"remove"` // delete the other copies instead of linking them
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	n, err := app.MergeDuplicates(r.Context(), ms, a.Linker, body.SHA256, body.Size, body.KeepPart, time.Now())
+	n, err := app.MergeDuplicates(r.Context(), ms, a.Linker, body.SHA256, body.Size, body.KeepPart, body.Remove, time.Now())
 	if err != nil && n == 0 {
 		fail(w, err)
 		return
+	}
+	if n > 0 && body.Remove && a.Scan != nil {
+		a.Scan.Request() // the index drops the removed files
 	}
 	resp := map[string]any{"merged": n}
 	if err != nil {

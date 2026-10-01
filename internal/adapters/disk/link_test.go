@@ -40,6 +40,19 @@ func TestLinkMergesIdenticalFilesAndRefusesDifferentOnes(t *testing.T) {
 	if _, err := l.Link(ctx, "A/a.stl", "B/b.stl"); err != nil {
 		t.Errorf("linking again: %v", err)
 	}
+	write("C/c.stl", "same")
+	if err := l.Remove(ctx, "A/a.stl", "B/c.stl"); err == nil {
+		t.Error("removed a file with other content")
+	}
+	if err := l.Remove(ctx, "A/a.stl", "A/a.stl"); err == nil {
+		t.Error("removed the kept file")
+	}
+	if err := l.Remove(ctx, "A/a.stl", "C/c.stl"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "C/c.stl")); !os.IsNotExist(err) {
+		t.Error("copy still there")
+	}
 	if _, err := l.Link(ctx, "../x", "B/b.stl"); err == nil {
 		t.Error("path outside the root accepted")
 	}

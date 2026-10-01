@@ -163,13 +163,17 @@ function Duplicates({ admin }: { admin: boolean }) {
   useEffect(() => {
     load(0);
   }, [load]);
-  const merge = (g: DuplicateGroup, keepPart: number) => {
+  const merge = (g: DuplicateGroup, keepPart: number, remove: boolean) => {
     const keep = g.files.find((f) => f.partId === keepPart);
-    if (!window.confirm(`Keep ${keep?.path} and make the other ${g.files.filter((f) => !f.linked).length - 1} cop(ies) hard links to it? Every model keeps all its files; only the disk space is shared.`)) return;
+    const others = g.files.filter((f) => f.partId !== keepPart && (remove || !f.linked)).length;
+    const text = remove
+      ? `Keep ${keep?.path} and DELETE the other ${others} cop${others === 1 ? "y" : "ies"} from the disk? The models they belong to lose those files.`
+      : `Keep ${keep?.path} and make the other ${others} cop${others === 1 ? "y" : "ies"} hard links to it? Every model keeps all its files; only the disk space is shared.`;
+    if (!window.confirm(text)) return;
     setNote("");
-    api.mergeDuplicates(g, keepPart).then(
+    api.mergeDuplicates(g, keepPart, remove).then(
       (r) => {
-        setNote(r.error ? `Merged ${r.merged}; ${r.error}` : `Merged ${r.merged} file(s) into one copy.`);
+        setNote(r.error ? `Done for ${r.merged}; ${r.error}` : `${remove ? "Deleted" : "Merged"} ${r.merged} file(s).`);
         load(0);
       },
       (e) => setError(String(e)),
@@ -179,7 +183,7 @@ function Duplicates({ admin }: { admin: boolean }) {
     <section>
       <h2>Files that are in the library twice ({total})</h2>
       <p className="muted">
-        Files with exactly the same content. {canMerge && admin ? "“Merge” keeps the copy you pick and turns the others into hard links to it (every model keeps all its files, the space is shared; works inside one disk). " : "Nothing is deleted here. "}{" "}
+        Files with exactly the same content. {canMerge && admin ? "Pick the copy to keep: the others can be deleted from the disk, or turned into hard links to it (every model keeps all its files, the space is shared; works inside one disk). " : "Nothing is deleted here. "}{" "}
         Smallest file considered:{" "}
         <select value={min} onChange={(e) => setMin(Number(e.target.value))}>
           {[0, 64, 1024, 10240].map((k) => (
@@ -203,8 +207,13 @@ function Duplicates({ admin }: { admin: boolean }) {
                 <span className="name muted">{f.path}</span>
                 {f.linked && <span className="muted"> · hard link, no extra space</span>}
                 {admin && canMerge && !f.linked && (
-                  <button className="link" onClick={() => merge(g, f.partId)}>
-                    keep this one, merge the others
+                  <button className="link" onClick={() => merge(g, f.partId, true)}>
+                    keep this one, delete the others
+                  </button>
+                )}
+                {admin && canMerge && !f.linked && (
+                  <button className="link" onClick={() => merge(g, f.partId, false)}>
+                    keep this one, link the others
                   </button>
                 )}
               </li>

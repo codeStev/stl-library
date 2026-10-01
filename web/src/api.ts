@@ -401,8 +401,8 @@ export const api = {
   healthPause: () => send("POST", "/api/health/pause"),
   dismissHealthEvent: (id: number) => send("POST", `/api/health/events/${id}/dismiss`),
   setGaps: () => get<SetGap[]>("/api/set-gaps"),
-  mergeDuplicates: (g: { sha256: string; size: number }, keepPart: number) =>
-    send<{ merged: number; error?: string }>("POST", "/api/duplicates/merge", { sha256: g.sha256, size: g.size, keepPart }),
+  mergeDuplicates: (g: { sha256: string; size: number }, keepPart: number, remove: boolean) =>
+    send<{ merged: number; error?: string }>("POST", "/api/duplicates/merge", { sha256: g.sha256, size: g.size, keepPart, remove }),
   duplicates: (minKB: number, offset: number) => get<DuplicatePage>(`/api/duplicates?min=${minKB}&limit=25&offset=${offset}`),
   facets: () => get<Record<"scale" | "supports" | "format" | "fill", Facet[]>>("/api/facets"),
   tags: () => get<Tag[]>("/api/tags"),
